@@ -1,0 +1,182 @@
+/**
+ * Sigma serialization helpers for Ergo subscription box registers.
+ *
+ * Register layout:
+ *   R4: (Int, Coll[Byte])        — (planId, subscriberErgoTreeBytes)
+ *   R5: (Long, Long, Long)       — (amountRemaining, ratePerInterval, intervalMs)
+ *   R6: (Long, Long)             — (lastCollected, expiry)
+ *   R7: Coll[Byte]               — paymentTokenId (empty for native ERG)
+ *   R8: Coll[Byte]               — userEncrypted
+ *
+ * Uses Fleet SDK serializer for Sigma type encoding/decoding.
+ */
+
+import {
+  SConstant,
+  SInt,
+  SLong,
+  SByte,
+  SColl,
+  SPair,
+  STupleType,
+  SLongType,
+  decode,
+} from "@fleet-sdk/serializer";
+import { hex } from "@fleet-sdk/crypto";
+import type { SubscriptionState } from "./types.js";
+import { ergoTreeFromAddress } from "./address.js";
+import { ErgoAddress, Network } from "@fleet-sdk/core";
+
+// ---------------------------------------------------------------------------
+// Primitive encoders
+// ---------------------------------------------------------------------------
+
+/** Encode an Int value as Sigma SInt hex. */
+export function encodeInt(value: number): string {
+  return SInt(value).toHex();
+}
+
+/** Encode a Long value as Sigma SLong hex. */
+export function encodeLong(value: bigint): string {
+  return SLong(value).toHex();
+}
+
+/** Encode raw bytes (given as hex string) as Sigma Coll[Byte] hex. */
+export function encodeBytes(hexStr: string): string {
+  const bytes = hex.decode(hexStr);
+  return SColl(SByte, bytes).toHex();
+}
+
+/** Encode a UTF-8 string as Sigma Coll[Byte] hex. */
+export function encodeString(s: string): string {
+  const bytes = new TextEncoder().encode(s);
+  return SColl(SByte, bytes).toHex();
+}
+
+// ---------------------------------------------------------------------------
+// Register encoders
+// ---------------------------------------------------------------------------
+
+/**
+ * Encode subscription registers R4-R8 from a SubscriptionState.
+ * Returns a map of register keys ("R4" .. "R8") to serialized hex values.
+ */
+export function encodeSubscriptionRegisters(
+  state: SubscriptionState,
+): Record<string, string> {
+  // R4: (Int, Coll[Byte]) — (planId, subscriberErgoTreeBytes)
+  const subscriberErgoTree = ergoTreeFromAddress(state.subscriber);
+  const ergoTreeBytes = hex.decode(subscriberErgoTree);
+  const r4 = SPair(SInt(state.planId), SColl(SByte, ergoTreeBytes));
+
+  // R5: (Long, Long, Long) — (amountRemaining, ratePerInterval, intervalMs)
+  // Use SConstant + STupleType for a proper 3-element tuple
+  const r5 = new SConstant(
+    new STupleType([new SLongType(), new SLongType(), new SLongType()]),
+    [state.amountRemaining, state.ratePerInterval, state.intervalMs],
+  );
+
+  // R6: (Long, Long) — (lastCollected, expiry)
+  const r6 = SPair(SLong(state.lastCollected), SLong(state.expiry));
+
+  // R7: Coll[Byte] — paymentTokenId (empty bytes for native ERG)
+  const tokenIdBytes = state.paymentTokenId
+    ? hex.decode(state.paymentTokenId)
+    : new Uint8Array(0);
+  const r7 = SColl(SByte, tokenIdBytes);
+
+  // R8: Coll[Byte] — userEncrypted
+  const encryptedBytes = state.userEncrypted
+    ? hex.decode(state.userEncrypted)
+    : new Uint8Array(0);
+  const r8 = SColl(SByte, encryptedBytes);
+
+  return {
+    R4: r4.toHex(),
+    R5: r5.toHex(),
+    R6: r6.toHex(),
+    R7: r7.toHex(),
+    R8: r8.toHex(),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Register decoders
+// ---------------------------------------------------------------------------
+
+/**
+ * Decode subscription state from box registers.
+ * Returns a partial SubscriptionState — only fields present in the registers
+ * are populated (beaconTokenId and creationHeight come from box metadata, not
+ * registers, so they are never set here).
+ */
+export function decodeSubscriptionRegisters(
+  regs: Record<string, string>,
+): Partial<SubscriptionState> {
+  const result: Partial<SubscriptionState> = {};
+
+  // R4: (Int, Coll[Byte]) — (planId, subscriberErgoTreeBytes)
+  const r4Hex = regs["R4"];
+  if (r4Hex) {
+    const r4 = decode<[number, Uint8Array]>(r4Hex);
+    if (r4) {
+      result.planId = r4[0];
+      // Convert ErgoTree bytes back to address (default to mainnet)
+      const ergoTree = hex.encode(r4[1]);
+      try {
+        const addr = ErgoAddress.fromErgoTree(ergoTree, Network.Mainnet);
+        result.subscriber = addr.encode(Network.Mainnet);
+      } catch {
+        // If we can't decode the ErgoTree as mainnet, try testnet
+        try {
+          const addr = ErgoAddress.fromErgoTree(ergoTree, Network.Testnet);
+          result.subscriber = addr.encode(Network.Testnet);
+        } catch {
+          // Store the raw ErgoTree hex as fallback
+          result.subscriber = ergoTree;
+        }
+      }
+    }
+  }
+
+  // R5: (Long, Long, Long) — (amountRemaining, ratePerInterval, intervalMs)
+  const r5Hex = regs["R5"];
+  if (r5Hex) {
+    const r5 = decode<[bigint, bigint, bigint]>(r5Hex);
+    if (r5) {
+      result.amountRemaining = r5[0];
+      result.ratePerInterval = r5[1];
+      result.intervalMs = r5[2];
+    }
+  }
+
+  // R6: (Long, Long) — (lastCollected, expiry)
+  const r6Hex = regs["R6"];
+  if (r6Hex) {
+    const r6 = decode<[bigint, bigint]>(r6Hex);
+    if (r6) {
+      result.lastCollected = r6[0];
+      result.expiry = r6[1];
+    }
+  }
+
+  // R7: Coll[Byte] — paymentTokenId
+  const r7Hex = regs["R7"];
+  if (r7Hex) {
+    const r7 = decode<Uint8Array>(r7Hex);
+    if (r7) {
+      result.paymentTokenId = r7.length > 0 ? hex.encode(r7) : "";
+    }
+  }
+
+  // R8: Coll[Byte] — userEncrypted
+  const r8Hex = regs["R8"];
+  if (r8Hex) {
+    const r8 = decode<Uint8Array>(r8Hex);
+    if (r8) {
+      result.userEncrypted = hex.encode(r8);
+    }
+  }
+
+  return result;
+}
