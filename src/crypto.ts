@@ -76,6 +76,47 @@ export function eciesDecrypt(privateKeyHex: string, ciphertextHex: string): stri
   return decrypted.toString("utf8");
 }
 
+// ── ECIES Encrypt ────────────────────────────────────────────────────
+
+/**
+ * Encrypt plaintext using ECIES with a recipient's secp256k1 public key.
+ *
+ * Wire format: ephemeralPub(65) + IV(12) + ciphertext + authTag(16)
+ * Algorithm:   secp256k1-ECDH -> HKDF-SHA256(32) -> AES-256-GCM
+ *
+ * @param publicKeyHex - Recipient public key (hex, uncompressed 65 bytes or compressed 33 bytes)
+ * @param plaintext    - Data to encrypt (UTF-8 string)
+ * @returns hex string of ephemeralPub + IV + ciphertext + authTag
+ */
+export function eciesEncrypt(publicKeyHex: string, plaintext: string): string {
+  // Generate ephemeral keypair
+  const ephemeralPriv = randomBytes(32);
+  const ephemeralPub = secp256k1.getPublicKey(ephemeralPriv, false); // uncompressed (65 bytes)
+
+  // ECDH: derive shared secret X coordinate
+  const recipientPub = hexToBytes(publicKeyHex);
+  const sharedPoint = secp256k1.getSharedSecret(ephemeralPriv, recipientPub, false);
+  const sharedX = sharedPoint.slice(1, 33);
+
+  // HKDF-SHA256: derive 32-byte encryption key (empty salt, empty info)
+  const encryptionKey = hkdf(sha256, sharedX, new Uint8Array(0), new Uint8Array(0), 32);
+
+  // AES-256-GCM encrypt
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", encryptionKey, iv);
+  const encrypted = Buffer.concat([cipher.update(plaintext, "utf8"), cipher.final()]);
+  const authTag = cipher.getAuthTag();
+
+  // Wire format: ephemeralPub(65) + IV(12) + ciphertext + authTag(16)
+  const result = new Uint8Array(65 + 12 + encrypted.length + 16);
+  result.set(ephemeralPub, 0);
+  result.set(iv, 65);
+  result.set(encrypted, 77);
+  result.set(authTag, 77 + encrypted.length);
+
+  return bytesToHex(result);
+}
+
 // ── Symmetric Encrypt / Decrypt ──────────────────────────────────────
 
 /**
