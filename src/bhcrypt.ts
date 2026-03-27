@@ -9,9 +9,9 @@
  *   generate-mnemonic                                Generate 15-word BIP39 mnemonic
  *   validate-mnemonic   <word1> <word2> ...          Validate BIP39 mnemonic
  *   mnemonic-to-address <word1> <word2> ...          Derive Ergo address from mnemonic
- *   encrypt-symmetric   <key-hex> <plaintext-hex>    SHAKE256-keyed AES-256-GCM encryption
+ *   encrypt-symmetric   <key-hex> <data>    SHAKE256-keyed AES-256-GCM encryption
  *   decrypt-symmetric   <key-hex> <ciphertext-hex>   Reverse of above
- *   encrypt-asymmetric  <pubkey-hex> <plaintext-hex> ECIES secp256k1 encryption
+ *   encrypt-asymmetric  <pubkey-hex> <data> ECIES secp256k1 encryption
  *   decrypt-asymmetric  <privkey-hex> <ciphertext-hex> ECIES decryption
  *
  * Key derivation: BIP32 secp256k1 via m/44'/429'/0'/0/0 (EIP-3).
@@ -106,10 +106,10 @@ function main(): void {
 
     case "encrypt-symmetric": {
       const keyHex = args[1];
-      const plaintextHex = args[2];
-      if (!keyHex || !plaintextHex) die("Usage: bhcrypt encrypt-symmetric <key-hex> <plaintext-hex>");
+      const plaintext = args[2];
+      if (!keyHex || !plaintext) die("Usage: bhcrypt encrypt-symmetric <key-hex> <data>");
       requireHex(keyHex, "key");
-      const result = symmetricEncrypt(keyHex, plaintextHex);
+      const result = symmetricEncrypt(keyHex, plaintext);
       process.stdout.write(result + "\n");
       break;
     }
@@ -127,10 +127,10 @@ function main(): void {
 
     case "encrypt-asymmetric": {
       const pubKeyHex = args[1];
-      const plaintextHex = args[2];
-      if (!pubKeyHex || !plaintextHex) die("Usage: bhcrypt encrypt-asymmetric <pubkey-hex> <plaintext-hex>");
+      const plaintext = args[2];
+      if (!pubKeyHex || !plaintext) die("Usage: bhcrypt encrypt-asymmetric <pubkey-hex> <data>");
       requireHex(pubKeyHex, "pubkey");
-      const result = eciesEncrypt(pubKeyHex, plaintextHex);
+      const result = eciesEncrypt(pubKeyHex, plaintext);
       process.stdout.write(result + "\n");
       break;
     }
@@ -155,9 +155,9 @@ function main(): void {
         "  generate-mnemonic                                Generate 15-word BIP39 mnemonic\n" +
         "  validate-mnemonic   <word1> <word2> ...          Validate BIP39 mnemonic\n" +
         "  mnemonic-to-address <word1> <word2> ...          Derive Ergo address from mnemonic\n" +
-        "  encrypt-symmetric   <key-hex> <plaintext-hex>    Symmetric encryption\n" +
+        "  encrypt-symmetric   <key-hex> <data>    Symmetric encryption\n" +
         "  decrypt-symmetric   <key-hex> <ciphertext-hex>   Symmetric decryption\n" +
-        "  encrypt-asymmetric  <pubkey-hex> <plaintext-hex> ECIES encryption\n" +
+        "  encrypt-asymmetric  <pubkey-hex> <data> ECIES encryption\n" +
         "  decrypt-asymmetric  <privkey-hex> <ciphertext-hex> ECIES decryption",
       );
   }

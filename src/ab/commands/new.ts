@@ -3,7 +3,7 @@
  */
 
 import { loadAddressbook } from "../../bw/cli-utils.js";
-import { generateWallet as rootAgentGenerateWallet } from "../../root-agent/client.js";
+import { generateWallet as rootAgentGenerateWallet, addressbookSave } from "../../root-agent/client.js";
 import { assertMutableRole } from "../index.js";
 
 export async function newCommand(args: string[]): Promise<void> {
@@ -37,6 +37,12 @@ export async function newCommand(args: string[]): Promise<void> {
   }
 
   const { address } = await rootAgentGenerateWallet(name);
+  const keyfile = `/etc/blockhost/${name}.key`;
+
+  // Persist to addressbook
+  book[name] = { address, keyfile };
+  await addressbookSave(book as Record<string, unknown>);
+
   console.log(`Generated wallet '${name}' → ${address}`);
-  console.log(`Key saved to /etc/blockhost/${name}.key`);
+  console.log(`Key saved to ${book[name].keyfile}`);
 }
