@@ -27,7 +27,7 @@ export interface KnockParams {
  * Admin configuration from blockhost.yaml
  */
 export interface AdminConfig {
-  wallet_address: string;           // Admin wallet (bech32 addr1... or addr_test1...)
+  wallet_address: string;           // Admin wallet (Base58 Ergo address)
   shared_key: string;               // HMAC shared key (32-byte hex, no prefix)
   credential_nft_id?: string;       // Admin NFT token ID (optional)
   max_command_age?: number;         // Deprecated: pruning is now block-height based. Kept for config compat.

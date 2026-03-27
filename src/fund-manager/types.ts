@@ -1,22 +1,21 @@
 /**
- * Type definitions for fund-manager and bw CLI (Cardano)
+ * Type definitions for fund-manager and bw CLI.
  */
 
 export interface FundManagerState {
   last_fund_cycle: number;        // ms timestamp
-  last_gas_check: number;         // ms timestamp (kept for compat, less relevant on Cardano)
-  last_collateral_check: number;  // ms timestamp
+  last_gas_check: number;         // ms timestamp
   hot_wallet_generated: boolean;
 }
 
 export interface FundManagerConfig {
   fund_cycle_interval_hours: number;
   gas_check_interval_minutes: number;
-  min_withdrawal_lovelace: bigint;
-  gas_low_threshold_lovelace: bigint;
-  gas_swap_amount_lovelace: bigint;
-  server_stablecoin_buffer_lovelace: bigint;
-  hot_wallet_gas_lovelace: bigint;
+  min_withdrawal_nanoerg: bigint;
+  gas_low_threshold_nanoerg: bigint;
+  gas_swap_amount_nanoerg: bigint;
+  server_stablecoin_buffer_nanoerg: bigint;
+  hot_wallet_gas_nanoerg: bigint;
 }
 
 export interface RevenueShareRecipient {
@@ -37,9 +36,9 @@ export interface RevenueShareConfig {
 }
 
 export interface AddressbookEntry {
-  /** bech32 Cardano address */
+  /** Base58 Ergo address */
   address: string;
-  /** Path to key file (BIP39 mnemonic) */
+  /** Path to key file (private key or mnemonic) */
   keyfile?: string;
 }
 

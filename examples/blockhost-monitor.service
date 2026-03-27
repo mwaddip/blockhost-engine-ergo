@@ -1,5 +1,5 @@
 [Unit]
-Description=Blockhost Subscriptions Monitor (Cardano)
+Description=Blockhost Subscriptions Monitor (Ergo)
 After=network.target
 Requires=blockhost-root-agent.service
 After=blockhost-root-agent.service
