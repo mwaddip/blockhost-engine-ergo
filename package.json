@@ -16,6 +16,7 @@
     "@fleet-sdk/core": "^0.6.0",
     "@fleet-sdk/common": "^0.6.0",
     "@fleet-sdk/crypto": "^0.6.0",
+    "@fleet-sdk/serializer": "^0.6.0",
     "@noble/curves": "^1.8.0",
     "@noble/hashes": "^1.7.0",
     "@scure/bip39": "^2.0.1",

@@ -192,6 +192,13 @@ function trimUrl(url: string): string {
   return url.replace(/\/+$/, "");
 }
 
+/** Reject values that could manipulate URL paths. */
+function assertSafePathSegment(value: string, name: string): void {
+  if (/[\/\?#]|\.\./.test(value)) {
+    throw new Error(`Invalid ${name}: contains illegal URL characters`);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Implementation
 // ---------------------------------------------------------------------------
@@ -203,6 +210,13 @@ class ErgoProviderImpl implements ErgoProvider {
   constructor(nodeUrl: string, explorerUrl: string) {
     this.nodeUrl = trimUrl(nodeUrl);
     this.explorerUrl = trimUrl(explorerUrl);
+  }
+
+  private assertSecureForSecrets(): void {
+    const url = new URL(this.nodeUrl);
+    if (url.protocol !== "https:" && !["localhost", "127.0.0.1", "::1"].includes(url.hostname)) {
+      throw new Error("Refusing to send secrets to a non-localhost HTTP node. Use HTTPS or localhost.");
+    }
   }
 
   // -- Node helpers --
@@ -260,12 +274,19 @@ class ErgoProviderImpl implements ErgoProvider {
   }
 
   async getUnspentBoxesByErgoTree(ergoTree: string): Promise<ErgoBox[]> {
-    // Node expects the raw ErgoTree hex as a JSON string body
-    const boxes = await this.nodePost<NodeBoxResponse[]>(
-      "/blockchain/box/unspent/byErgoTree",
-      ergoTree,
-    );
-    return boxes.map(normalizeNodeBox);
+    const all: ErgoBox[] = [];
+    const limit = 500;
+    let offset = 0;
+    while (true) {
+      const boxes = await this.nodePost<NodeBoxResponse[]>(
+        `/blockchain/box/unspent/byErgoTree?offset=${offset}&limit=${limit}`,
+        ergoTree,
+      );
+      all.push(...boxes.map(normalizeNodeBox));
+      if (boxes.length < limit) break;
+      offset += limit;
+    }
+    return all;
   }
 
   async submitTx(signedTx: unknown): Promise<string> {
@@ -279,6 +300,7 @@ class ErgoProviderImpl implements ErgoProvider {
     secrets: string[],
     inputsRaw?: string[],
   ): Promise<unknown> {
+    this.assertSecureForSecrets();
     const body: Record<string, unknown> = {
       tx: unsignedTx,
       secrets: { dlog: secrets },
@@ -290,6 +312,7 @@ class ErgoProviderImpl implements ErgoProvider {
   }
 
   async getToken(tokenId: string): Promise<TokenInfo> {
+    assertSafePathSegment(tokenId, "tokenId");
     const raw = await this.explorerGet<ExplorerTokenResponse>(
       `/tokens/${tokenId}`,
     );
@@ -304,6 +327,7 @@ class ErgoProviderImpl implements ErgoProvider {
   }
 
   async getBalance(address: string): Promise<BalanceInfo> {
+    assertSafePathSegment(address, "address");
     const raw = await this.explorerGet<ExplorerBalanceResponse>(
       `/addresses/${address}/balance/total`,
     );
@@ -323,6 +347,7 @@ class ErgoProviderImpl implements ErgoProvider {
     offset: number,
     limit: number,
   ): Promise<unknown[]> {
+    assertSafePathSegment(address, "address");
     const raw = await this.explorerGet<ExplorerTxListResponse>(
       `/addresses/${address}/transactions?offset=${offset}&limit=${limit}`,
     );
@@ -330,6 +355,7 @@ class ErgoProviderImpl implements ErgoProvider {
   }
 
   async getBox(boxId: string): Promise<ErgoBox> {
+    assertSafePathSegment(boxId, "boxId");
     // Try the node first (faster, exact box lookup)
     try {
       const raw = await this.nodeGet<NodeBoxResponse>(

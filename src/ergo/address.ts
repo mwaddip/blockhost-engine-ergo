@@ -64,3 +64,12 @@ export function ergoTreeFromAddress(address: string): string {
 export function isMainnet(address: string): boolean {
   return ErgoAddress.getNetworkType(address) === Network.Mainnet;
 }
+
+/** Extract the compressed public key hex from a P2PK address */
+export function publicKeyFromAddress(address: string): string {
+  const tree = ergoTreeFromAddress(address);
+  if (tree.startsWith("0008cd") && tree.length === 72) {
+    return tree.slice(6);
+  }
+  throw new Error("Not a P2PK address — cannot extract public key");
+}
