@@ -1,0 +1,23 @@
+node_modules/
+dist/
+build/
+*.js
+*.d.ts
+*.js.map
+!engine.json
+!scripts/signup-engine.js
+.env
+*.key
+*.secret
+target/
+
+# Build artifacts
+*.deb
+packaging/*.deb
+package-lock.json
+
+# Tool artifacts
+.agents/
+.claude/
+skills-lock.json
+docs/superpowers/

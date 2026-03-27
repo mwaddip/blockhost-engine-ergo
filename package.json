@@ -1,0 +1,35 @@
+{
+  "name": "blockhost-engine-ergo",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Ergo blockchain engine for BlockHost hosting platform",
+  "bin": {
+    "bw": "./src/bw/index.ts",
+    "ab": "./src/ab/index.ts",
+    "is": "./src/is/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "monitor": "npx tsx src/monitor/index.ts"
+  },
+  "dependencies": {
+    "@fleet-sdk/core": "^0.6.0",
+    "@fleet-sdk/common": "^0.6.0",
+    "@fleet-sdk/crypto": "^0.6.0",
+    "@noble/curves": "^1.8.0",
+    "@noble/hashes": "^1.7.0",
+    "@scure/bip39": "^2.0.1",
+    "@scure/bip32": "^1.6.0",
+    "js-yaml": "^4.1.1"
+  },
+  "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "latest",
+    "esbuild": "^0.25.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}
