@@ -285,8 +285,20 @@ fi
 cp "$PROJECT_DIR/scripts/signup-template.html" "$PKG_DIR/usr/share/blockhost/"
 cp "$PROJECT_DIR/scripts/signup-engine.js" "$PKG_DIR/usr/share/blockhost/"
 
-# Systemd service
+# ergo-signer binary (pre-built Rust binary for transaction signing)
+SIGNER_BIN="$PROJECT_DIR/ergo-signer/target/release/ergo-signer"
+if [ -f "$SIGNER_BIN" ]; then
+    cp "$SIGNER_BIN" "$PKG_DIR/usr/share/blockhost/ergo-signer"
+    chmod 755 "$PKG_DIR/usr/share/blockhost/ergo-signer"
+    echo "  ergo-signer ($(du -h "$SIGNER_BIN" | cut -f1))"
+else
+    echo "WARNING: ergo-signer binary not found at $SIGNER_BIN"
+    echo "  Run: cd ergo-signer && cargo build --release"
+fi
+
+# Systemd services
 cp "$PROJECT_DIR/examples/blockhost-monitor.service" "$PKG_DIR/lib/systemd/system/blockhost-monitor.service"
+cp "$PROJECT_DIR/examples/ergo-signer.service" "$PKG_DIR/lib/systemd/system/ergo-signer.service"
 
 # ============================================
 # Build the .deb package

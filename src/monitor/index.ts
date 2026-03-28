@@ -265,7 +265,7 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  const provider = createProvider(config.nodeUrl, config.explorerUrl);
+  const provider = createProvider(config.explorerUrl, config.signerUrl);
   const mainnet = config.network === "mainnet";
 
   // Load server identity
@@ -292,8 +292,8 @@ async function main(): Promise<void> {
   scanner.restoreFromFile();
 
   console.log(`Network:          ${config.network}`);
-  console.log(`Node URL:         ${config.nodeUrl}`);
   console.log(`Explorer URL:     ${config.explorerUrl}`);
+  console.log(`Signer URL:       ${config.signerUrl}`);
   console.log(`Poll interval:    ${POLL_INTERVAL_MS / 1000}s`);
   console.log(`Reconcile every:  ${RECONCILE_INTERVAL_MS / 60000}min`);
   console.log("----------------------------------------------\n");
