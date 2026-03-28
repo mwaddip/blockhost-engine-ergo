@@ -94,33 +94,22 @@ interface BoxWithErgoTree {
 /**
  * Find an unspent box that contains a specific token.
  *
- * Uses the explorer's /api/v1/boxes/byTokenId endpoint (fetched directly
- * since our provider doesn't expose it as a dedicated method).
- *
- * Falls back to querying the token info and checking the issuance box.
+ * Uses the provider's getBoxesByTokenId method which queries the explorer's
+ * /api/v1/boxes/byTokenId/{tokenId}/unspent endpoint.
  */
 async function findBoxByToken(
   tokenId: string,
   provider: ErgoProvider,
 ): Promise<BoxWithErgoTree | null> {
-  // Try to get the box that currently holds this token.
-  // The provider's getToken() gives us the issuance box ID, but the token
-  // may have moved. We'll try to look up the box directly.
   try {
-    const tokenInfo = await provider.getToken(tokenId);
-    // Check if the issuance box still holds the token
-    const box = await provider.getBox(tokenInfo.boxId);
-    const hasToken = box.assets.some((a) => a.tokenId === tokenId);
-    if (hasToken) {
+    const boxes = await provider.getBoxesByTokenId(tokenId);
+    const box = boxes.find((b) => b.assets.some((a) => a.tokenId === tokenId));
+    if (box) {
       return { boxId: box.boxId, ergoTree: box.ergoTree };
     }
   } catch {
-    // Issuance box may be spent — token has moved
+    // Explorer query failed
   }
 
-  // If we can't find it via the issuance box, return null.
-  // A more sophisticated implementation would use the explorer's
-  // /boxes/byTokenId/unspent endpoint, but that requires direct
-  // fetch calls outside the provider interface.
   return null;
 }

@@ -19,7 +19,7 @@ def generate_wallet(params):
         return {"ok": False, "error": f"invalid wallet name: {name}"}
 
     # Deny reserved names
-    DENY_NAMES = frozenset({'admin', 'server', 'dev', 'broker'})
+    DENY_NAMES = frozenset({'admin', 'server', 'dev', 'broker', 'hot'})
     if name in DENY_NAMES:
         return {"ok": False, "error": f"reserved name: {name}"}
 
@@ -31,8 +31,7 @@ def generate_wallet(params):
     # bhcrypt writes the private key to the file and prints the address to stdout
     try:
         result = subprocess.run(
-            ["npx", "tsx", "/usr/share/blockhost/src/bhcrypt.ts",
-             "generate-keypair", key_path],
+            ["bhcrypt", "generate-keypair", key_path],
             capture_output=True,
             text=True,
             timeout=30,

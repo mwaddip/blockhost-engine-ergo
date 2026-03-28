@@ -112,11 +112,7 @@ def decrypt_config(sig: str, ciphertext: str) -> dict:
 
     try:
         result = subprocess.run(
-            [
-                "bhcrypt", "decrypt-symmetric",
-                "--signature", sig.strip(),
-                "--ciphertext", ciphertext.strip(),
-            ],
+            ["bhcrypt", "decrypt-symmetric", sig.strip(), ciphertext.strip()],
             capture_output=True,
             text=True,
             timeout=30,
@@ -137,11 +133,7 @@ def encrypt_config(sig: str, plaintext: str) -> str:
 
     try:
         result = subprocess.run(
-            [
-                "bhcrypt", "encrypt-symmetric",
-                "--signature", sig.strip(),
-                "--plaintext", plaintext.strip(),
-            ],
+            ["bhcrypt", "encrypt-symmetric", sig.strip(), plaintext.strip()],
             capture_output=True,
             text=True,
             timeout=30,
@@ -238,7 +230,7 @@ def wizard_ergo():
 def api_generate_wallet():
     """Generate a new Ergo keypair.
 
-    Uses bhcrypt keygen CLI (bundled with engine package).
+    Uses bhcrypt generate-mnemonic CLI (bundled with engine package).
     Returns mnemonic phrase and Ergo Base58 address.
     """
     blockchain = session.get("blockchain", {})
@@ -246,7 +238,7 @@ def api_generate_wallet():
 
     try:
         result = subprocess.run(
-            ["bhcrypt", "keygen", "--network", network],
+            ["bhcrypt", "generate-mnemonic", network],
             capture_output=True,
             text=True,
             timeout=30,
@@ -296,7 +288,7 @@ def api_validate_mnemonic():
 
     try:
         result = subprocess.run(
-            ["bhcrypt", "validate-mnemonic", "--network", network],
+            ["bhcrypt", "validate-mnemonic", network],
             capture_output=True,
             text=True,
             timeout=30,
@@ -611,9 +603,9 @@ def _bw_env(blockchain: dict) -> dict:
 
 
 def finalize_wallet(config: dict) -> tuple[bool, Optional[str]]:
-    """Generate server wallet via bhcrypt keygen and save mnemonic to deployer.key.
+    """Generate server wallet via bhcrypt generate-mnemonic and save mnemonic to deployer.key.
 
-    For wallet_mode == 'generate': runs bhcrypt keygen and writes key file.
+    For wallet_mode == 'generate': runs bhcrypt generate-mnemonic and writes key file.
     For wallet_mode == 'import': validates and writes the provided mnemonic.
     Idempotent: skips write if file exists with matching content.
     """
@@ -627,9 +619,9 @@ def finalize_wallet(config: dict) -> tuple[bool, Optional[str]]:
         mnemonic_file = CONFIG_DIR / "deployer.key"
 
         if wallet_mode == "generate" and not mnemonic:
-            # Generate wallet via bhcrypt keygen
+            # Generate wallet via bhcrypt generate-mnemonic
             result = subprocess.run(
-                ["bhcrypt", "keygen", "--network", network],
+                ["bhcrypt", "generate-mnemonic", network],
                 capture_output=True,
                 text=True,
                 timeout=30,
@@ -1021,11 +1013,7 @@ def finalize_mint_nft(config: dict) -> tuple[bool, Optional[str]]:
             })
             try:
                 result = subprocess.run(
-                    [
-                        "bhcrypt", "encrypt-symmetric",
-                        "--signature", admin_signature,
-                        "--plaintext", connection_details,
-                    ],
+                    ["bhcrypt", "encrypt-symmetric", admin_signature, connection_details],
                     capture_output=True,
                     text=True,
                     timeout=30,

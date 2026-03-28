@@ -74,6 +74,9 @@ export interface ErgoProvider {
 
   /** Get a specific box by ID from the node. */
   getBox(boxId: string): Promise<ErgoBox>;
+
+  /** Get unspent boxes containing a specific token from the explorer. */
+  getBoxesByTokenId(tokenId: string): Promise<ErgoBox[]>;
 }
 
 // ---------------------------------------------------------------------------
@@ -129,6 +132,11 @@ interface ExplorerBoxResponse {
 
 interface ExplorerTxListResponse {
   items: unknown[];
+  total: number;
+}
+
+interface ExplorerBoxListResponse {
+  items: ExplorerBoxResponse[];
   total: number;
 }
 
@@ -369,6 +377,22 @@ class ErgoProviderImpl implements ErgoProvider {
       );
       return normalizeExplorerBox(raw);
     }
+  }
+
+  async getBoxesByTokenId(tokenId: string): Promise<ErgoBox[]> {
+    assertSafePathSegment(tokenId, "tokenId");
+    const all: ErgoBox[] = [];
+    const limit = 500;
+    let offset = 0;
+    while (true) {
+      const res = await this.explorerGet<ExplorerBoxListResponse>(
+        `/boxes/byTokenId/${tokenId}/unspent?offset=${offset}&limit=${limit}`,
+      );
+      all.push(...res.items.map(normalizeExplorerBox));
+      if (res.items.length < limit) break;
+      offset += limit;
+    }
+    return all;
   }
 }
 

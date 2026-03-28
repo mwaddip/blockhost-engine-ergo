@@ -26,6 +26,9 @@ import {
   handleSubscriptionRemoved,
 } from "../handlers/index.js";
 import { runReconciliation } from "../reconcile/index.js";
+import { processAdminCommands, loadAdminConfig, initAdminCommands, shutdownAdminCommands } from "../admin/index.js";
+import type { AdminConfig } from "../admin/index.js";
+import { runFundManager, runGasCheck, shouldRunFundCycle, shouldRunGasCheck } from "../fund-manager/index.js";
 import { STATE_DIR, TESTING_MODE_FILE, CONFIG_DIR } from "../paths.js";
 
 // -- Testing mode ------------------------------------------------------------
@@ -62,8 +65,7 @@ let running = true;
 let pipelineBusy = false;
 const eventQueue: QueuedEvent[] = [];
 let lastReconcile = 0;
-let lastFundCycle = 0;
-let lastGasCheck = 0;
+let adminConfig: AdminConfig | null = null;
 
 // -- Pipeline state persistence ----------------------------------------------
 
@@ -138,24 +140,28 @@ async function maybeRunReconciliation(provider: ErgoProvider): Promise<void> {
   lastReconcile = now;
 }
 
-function maybeRunFundCycle(): void {
-  const now = Date.now();
+async function maybeRunFundCycle(): Promise<void> {
   if (pipelineBusy) return;
-  if (now - lastFundCycle < FUND_CYCLE_INTERVAL_MS) return;
+  if (!shouldRunFundCycle()) return;
 
-  // Fund manager is Task 8 -- placeholder for now
-  console.log("[MONITOR] Fund cycle check (not yet implemented)");
-  lastFundCycle = now;
+  console.log("[MONITOR] Running fund cycle...");
+  try {
+    await runFundManager();
+  } catch (err) {
+    console.error(`[MONITOR] Fund cycle error: ${err}`);
+  }
 }
 
-function maybeRunGasCheck(): void {
-  const now = Date.now();
+async function maybeRunGasCheck(): Promise<void> {
   if (pipelineBusy) return;
-  if (now - lastGasCheck < GAS_CHECK_INTERVAL_MS) return;
+  if (!shouldRunGasCheck()) return;
 
-  // Gas check is Task 8 -- placeholder for now
-  console.log("[MONITOR] Gas check (not yet implemented)");
-  lastGasCheck = now;
+  console.log("[MONITOR] Running gas check...");
+  try {
+    await runGasCheck();
+  } catch (err) {
+    console.error(`[MONITOR] Gas check error: ${err}`);
+  }
 }
 
 // -- Core poll loop ----------------------------------------------------------
@@ -192,10 +198,19 @@ async function poll(
         await drainQueue();
       }
 
+      // Admin commands (only when pipeline is idle)
+      if (adminConfig) {
+        try {
+          await processAdminCommands(provider, adminConfig);
+        } catch (err) {
+          console.error(`[MONITOR] Admin command processing error: ${err}`);
+        }
+      }
+
       // Periodic tasks (only when pipeline is idle)
       await maybeRunReconciliation(provider);
-      maybeRunFundCycle();
-      maybeRunGasCheck();
+      await maybeRunFundCycle();
+      await maybeRunGasCheck();
 
     } catch (err) {
       console.error(`[MONITOR] Poll error: ${err}`);
@@ -217,6 +232,9 @@ function setupShutdown(): void {
     console.log(`\n[MONITOR] Received ${signal}, shutting down...`);
     running = false;
     clearPipelineState();
+    if (adminConfig) {
+      void shutdownAdminCommands();
+    }
     // Allow the current poll iteration to finish, then exit
     setTimeout(() => process.exit(0), 2000);
   };
@@ -301,11 +319,17 @@ async function main(): Promise<void> {
   console.log(`Reconcile every:  ${RECONCILE_INTERVAL_MS / 60000}min`);
   console.log("----------------------------------------------\n");
 
+  // Load admin config (optional)
+  adminConfig = loadAdminConfig();
+  if (adminConfig) {
+    initAdminCommands();
+    console.log(`Admin commands:   enabled (wallet: ${adminConfig.wallet_address.slice(0, 15)}...)`);
+  } else {
+    console.log("Admin commands:   not configured");
+  }
+
   // Initialize periodic task timers from now
-  const now = Date.now();
-  lastReconcile = now;
-  lastFundCycle = now;
-  lastGasCheck = now;
+  lastReconcile = Date.now();
 
   // Clear any stale pipeline state from a previous crash
   clearPipelineState();

@@ -112,6 +112,7 @@ function analyzeClaimable(
 export async function executeWithdraw(
   toRole: string,
   book: Addressbook,
+  tokenFilter?: string,
 ): Promise<void> {
   const toAddress = resolveAddress(toRole, book);
   const provider = getProviderClient();
@@ -161,7 +162,11 @@ export async function executeWithdraw(
   const claimable: ClaimableInfo[] = [];
   for (const box of subscriptionBoxes) {
     const info = analyzeClaimable(box, nowMs);
-    if (info) claimable.push(info);
+    if (info) {
+      // If a token filter is specified, only include boxes with that paymentTokenId
+      if (tokenFilter && info.state.paymentTokenId !== tokenFilter) continue;
+      claimable.push(info);
+    }
   }
 
   if (claimable.length === 0) {
@@ -302,14 +307,25 @@ export async function withdrawCommand(
   if (args.length < 1) {
     console.error("Usage: bw withdraw [token] <to>");
     console.error("  Example: bw withdraw admin");
+    console.error("  Example: bw withdraw <token_id> admin");
     process.exit(1);
   }
 
-  const [toRole] = args;
+  let tokenFilter: string | undefined;
+  let toRole: string;
+
+  if (args.length >= 2 && /^[0-9a-fA-F]{64}$/.test(args[0] ?? "")) {
+    // First arg is a 64-char hex token ID, second is the recipient
+    tokenFilter = args[0];
+    toRole = args[1] ?? "";
+  } else {
+    toRole = args[0] ?? "";
+  }
+
   if (!toRole) {
     console.error("Usage: bw withdraw [token] <to>");
     process.exit(1);
   }
 
-  await executeWithdraw(toRole, book);
+  await executeWithdraw(toRole, book, tokenFilter);
 }

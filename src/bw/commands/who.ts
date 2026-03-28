@@ -92,11 +92,14 @@ export async function whoCommand(args: string[]): Promise<void> {
   const provider = getProviderClient();
 
   try {
-    // Use the explorer to get token info (which includes the current box)
-    const tokenInfo = await provider.getToken(tokenId);
+    // Find unspent boxes containing this token
+    const boxes = await provider.getBoxesByTokenId(tokenId);
+    const box = boxes.find((b) => b.assets.some((a) => a.tokenId === tokenId));
 
-    // Get the box that currently holds the token
-    const box = await provider.getBox(tokenInfo.boxId);
+    if (!box) {
+      console.error(`No unspent box found holding token ${tokenId}`);
+      process.exit(1);
+    }
 
     // Derive the holder address from the box's ErgoTree
     const addr = ErgoAddress.fromErgoTree(box.ergoTree);
