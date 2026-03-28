@@ -20,8 +20,10 @@ import {
   decode,
 } from "@fleet-sdk/serializer";
 import { hex } from "@fleet-sdk/crypto";
+import * as fs from "fs";
 import type { SubscriptionState } from "./types.js";
 import { ergoTreeFromAddress } from "./address.js";
+import { TESTING_MODE_FILE } from "../paths.js";
 import { ErgoAddress, Network } from "@fleet-sdk/core";
 
 // ---------------------------------------------------------------------------
@@ -118,20 +120,15 @@ export function decodeSubscriptionRegisters(
     const r4 = decode<[number, Uint8Array]>(r4Hex);
     if (r4) {
       result.planId = r4[0];
-      // Convert ErgoTree bytes back to address (default to mainnet)
+      // Convert ErgoTree bytes back to address, respecting .testing-mode
       const ergoTree = hex.encode(r4[1]);
       try {
-        const addr = ErgoAddress.fromErgoTree(ergoTree, Network.Mainnet);
-        result.subscriber = addr.encode(Network.Mainnet);
+        const isTestnet = fs.existsSync(TESTING_MODE_FILE);
+        const network = isTestnet ? Network.Testnet : Network.Mainnet;
+        const addr = ErgoAddress.fromErgoTree(ergoTree, network);
+        result.subscriber = addr.encode(network);
       } catch {
-        // If we can't decode the ErgoTree as mainnet, try testnet
-        try {
-          const addr = ErgoAddress.fromErgoTree(ergoTree, Network.Testnet);
-          result.subscriber = addr.encode(Network.Testnet);
-        } catch {
-          // Store the raw ErgoTree hex as fallback
-          result.subscriber = ergoTree;
-        }
+        result.subscriber = ergoTree;
       }
     }
   }
