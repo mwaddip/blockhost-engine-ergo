@@ -1,0 +1,58 @@
+<!-- Ergo Engine Summary Section (rendered by engine plugin) -->
+<div class="summary-section">
+    <h3>Blockchain (Ergo)</h3>
+    <div class="summary-item">
+        <span class="summary-label">Network</span>
+        <span class="summary-value">{{ engine_summary.network_name }}</span>
+    </div>
+    <div class="summary-item">
+        <span class="summary-label">Node</span>
+        <span class="summary-value" style="font-size: 0.75rem; font-family: monospace;">
+            {% if engine_summary.node_url %}
+                {{ engine_summary.node_url }}
+            {% else %}
+                Default (localhost)
+            {% endif %}
+        </span>
+    </div>
+    <div class="summary-item">
+        <span class="summary-label">Explorer</span>
+        <span class="summary-value" style="font-size: 0.75rem; font-family: monospace;">
+            {% if engine_summary.explorer_url %}
+                {{ engine_summary.explorer_url[:40] }}{% if engine_summary.explorer_url|length > 40 %}...{% endif %}
+            {% else %}
+                Default (api.ergoplatform.com)
+            {% endif %}
+        </span>
+    </div>
+    {% if engine_summary.deployer_address %}
+    <div class="summary-item">
+        <span class="summary-label">Deployer</span>
+        <span class="summary-value" style="font-size: 0.75rem; font-family: monospace; word-break: break-all;">{{ engine_summary.deployer_address }}</span>
+    </div>
+    {% endif %}
+    <div class="summary-item">
+        <span class="summary-label">Contracts</span>
+        <span class="summary-value">{{ 'Pre-deployed' if engine_summary.contract_mode == 'existing' else 'Deploy during setup' }}</span>
+    </div>
+    {% if engine_summary.subscription_ergo_tree %}
+    <div class="summary-item">
+        <span class="summary-label">Subscription ErgoTree</span>
+        <span class="summary-value" style="font-size: 0.75rem; font-family: monospace;">{{ engine_summary.subscription_ergo_tree[:24] }}...</span>
+    </div>
+    {% endif %}
+    {% if engine_summary.reference_ergo_tree %}
+    <div class="summary-item">
+        <span class="summary-label">Reference ErgoTree</span>
+        <span class="summary-value" style="font-size: 0.75rem; font-family: monospace;">{{ engine_summary.reference_ergo_tree[:24] }}...</span>
+    </div>
+    {% endif %}
+    <div class="summary-item">
+        <span class="summary-label">Plan</span>
+        <span class="summary-value">{{ engine_summary.plan_name }} ({{ engine_summary.plan_price_cents }} cents/day)</span>
+    </div>
+    <div class="summary-item">
+        <span class="summary-label">Revenue Sharing</span>
+        <span class="summary-value">{{ 'Enabled' if engine_summary.revenue_share_enabled else 'Disabled' }}</span>
+    </div>
+</div>

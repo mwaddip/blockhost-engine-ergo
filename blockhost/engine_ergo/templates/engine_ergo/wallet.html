@@ -1,0 +1,342 @@
+{% extends "base.html" %}
+{% from "macros/wizard_steps.html" import step_bar %}
+
+{% block title %}Admin Wallet - BlockHost Installer{% endblock %}
+
+{% block content %}
+{{ step_bar('wallet') }}
+
+<div class="card">
+    <h2>Admin Wallet</h2>
+    <p class="text-muted mb-2">Connect your Ergo wallet to prove ownership. This wallet becomes the admin identity for your BlockHost instance.</p>
+
+    <!-- Section 1: Connect -->
+    <div id="section-connect" class="form-section">
+        <h3>1. Connect Wallet</h3>
+        <div id="wallet-list" style="display: flex; flex-wrap: wrap; gap: 0.5rem;"></div>
+        <div id="no-wallets" class="hidden">
+            <div class="alert alert-warning">
+                No EIP-12 compatible Ergo wallet detected. Please install a browser wallet extension
+                (Nautilus) and refresh this page.
+            </div>
+        </div>
+        <div id="connect-status" class="hidden" style="margin-top: 0.5rem;"></div>
+    </div>
+
+    <!-- Section 2: Sign -->
+    <div id="section-sign" class="form-section hidden">
+        <h3>2. Sign Message</h3>
+        <p class="text-muted mb-2" style="font-size: 0.875rem;">
+            Sign the public secret to prove wallet ownership. This signature is used to authenticate admin operations.
+        </p>
+        <div class="form-group">
+            <label for="public-secret-input">Public Secret</label>
+            <input type="text" id="public-secret-input" value="{{ public_secret | default('blockhost-access') }}" style="font-family: monospace;">
+            <p class="text-muted mt-1" style="font-size: 0.75rem;">
+                This is the shared secret configured for your BlockHost instance.
+            </p>
+        </div>
+        <button type="button" class="btn btn-primary" id="sign-btn" onclick="signMessage()">
+            Sign with Wallet
+        </button>
+        <div id="sign-status" class="hidden" style="margin-top: 0.5rem;"></div>
+    </div>
+
+    <!-- Section 3: Confirmed -->
+    <div id="section-confirmed" class="form-section hidden">
+        <h3>3. Wallet Confirmed</h3>
+        <div style="padding: 1rem; background: var(--bg-secondary); border-radius: 4px;">
+            <div class="summary-item">
+                <span class="summary-label">Wallet</span>
+                <span id="confirmed-wallet-name" class="summary-value"></span>
+            </div>
+            <div class="summary-item">
+                <span class="summary-label">Address</span>
+                <span id="confirmed-address" class="summary-value" style="font-size: 0.75rem; font-family: monospace; word-break: break-all;"></span>
+            </div>
+            <div class="summary-item">
+                <span class="summary-label">Signature</span>
+                <span class="summary-value" style="color: var(--success);">Captured</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Section 4: Restore -->
+    <div id="section-restore" class="form-section hidden">
+        <h3>Restore Configuration</h3>
+        <p class="text-muted mb-2" style="font-size: 0.875rem;">
+            If you have a previously exported <code>.enc</code> configuration backup, upload it here to restore your settings.
+        </p>
+        <div class="form-group">
+            <label for="restore-file">Configuration Backup (.enc)</label>
+            <input type="file" id="restore-file" accept=".enc" onchange="restoreConfig()">
+        </div>
+        <div id="restore-status" class="hidden" style="margin-top: 0.5rem;"></div>
+    </div>
+
+    <!-- Hidden form: POST to wizard_wallet -->
+    <form id="wallet-form" method="POST" action="{{ url_for('wizard_wallet') }}">
+        <input type="hidden" name="admin_wallet" id="form-admin-wallet" value="">
+        <input type="hidden" name="admin_signature" id="form-admin-signature" value="">
+        <input type="hidden" name="public_secret" id="form-public-secret" value="">
+
+        <div class="flex justify-between" style="margin-top: 2rem;">
+            <span></span>
+            <button type="submit" class="btn btn-primary" id="continue-btn" disabled>Continue</button>
+        </div>
+    </form>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+var walletApi = null;
+var walletName = '';
+var ergoAddress = '';
+
+// ---- Hex/bytes helpers ----
+function hexToBytes(hex) {
+    var bytes = [];
+    for (var i = 0; i < hex.length; i += 2) bytes.push(parseInt(hex.substr(i, 2), 16));
+    return bytes;
+}
+
+function bytesToHex(bytes) {
+    var hex = '';
+    for (var i = 0; i < bytes.length; i++) hex += bytes[i].toString(16).padStart(2, '0');
+    return hex;
+}
+
+// ---- EIP-12 Wallet detection (Nautilus / SAFEW / etc.) ----
+var KNOWN_WALLETS = ['nautilus', 'safew'];
+
+function detectWallets() {
+    var list = document.getElementById('wallet-list');
+
+    // EIP-12: wallets inject window.ergoConnector or window.ergo_request_read_access
+    // Nautilus injects window.ergoConnector.nautilus
+    var connector = window.ergoConnector;
+    if (!connector) {
+        // Fallback: check for legacy ergo object
+        if (window.ergo) {
+            addWalletButton(list, '__ergo_legacy', 'Ergo Wallet');
+            return;
+        }
+        document.getElementById('no-wallets').classList.remove('hidden');
+        return;
+    }
+
+    var found = 0;
+
+    // Known wallets first
+    for (var i = 0; i < KNOWN_WALLETS.length; i++) {
+        var name = KNOWN_WALLETS[i];
+        if (connector[name] && typeof connector[name].connect === 'function') {
+            addWalletButton(list, name, connector[name].name || name.charAt(0).toUpperCase() + name.slice(1));
+            found++;
+        }
+    }
+
+    // Any other EIP-12 wallets
+    var keys = Object.keys(connector);
+    for (var j = 0; j < keys.length; j++) {
+        var k = keys[j];
+        if (KNOWN_WALLETS.indexOf(k) === -1 && connector[k] && typeof connector[k].connect === 'function') {
+            addWalletButton(list, k, connector[k].name || k);
+            found++;
+        }
+    }
+
+    if (found === 0) {
+        document.getElementById('no-wallets').classList.remove('hidden');
+    }
+}
+
+function addWalletButton(container, id, label) {
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'btn btn-secondary';
+    btn.textContent = label;
+    btn.onclick = function() { connectWallet(id, label); };
+    container.appendChild(btn);
+}
+
+async function connectWallet(id, label) {
+    var statusDiv = document.getElementById('connect-status');
+    statusDiv.classList.remove('hidden');
+    statusDiv.innerHTML = '<div class="status-indicator">Connecting to ' + label + '...</div>';
+
+    try {
+        // EIP-12 connection flow
+        if (id === '__ergo_legacy') {
+            // Legacy: window.ergo is already the API
+            walletApi = window.ergo;
+        } else {
+            var connected = await window.ergoConnector[id].connect();
+            if (!connected) {
+                statusDiv.innerHTML = '<div class="status-indicator error">Connection rejected by wallet.</div>';
+                return;
+            }
+            walletApi = window.ergo;
+        }
+
+        walletName = label;
+
+        // EIP-12: get_change_address returns a Base58 address
+        var address = await walletApi.get_change_address();
+        if (!address) {
+            var addresses = await walletApi.get_used_addresses();
+            if (addresses && addresses.length > 0) {
+                address = addresses[0];
+            } else {
+                var unused = await walletApi.get_unused_addresses();
+                if (unused && unused.length > 0) {
+                    address = unused[0];
+                }
+            }
+        }
+
+        if (!address) {
+            statusDiv.innerHTML = '<div class="status-indicator error">No addresses found in wallet.</div>';
+            return;
+        }
+
+        ergoAddress = address;
+
+        statusDiv.innerHTML = '<div class="status-indicator success">Connected: ' + ergoAddress.slice(0, 12) + '...' + ergoAddress.slice(-8) + '</div>';
+
+        // Show sign section
+        document.getElementById('section-sign').classList.remove('hidden');
+    } catch (e) {
+        statusDiv.innerHTML = '<div class="status-indicator error">Connection failed: ' + (e.message || e) + '</div>';
+    }
+}
+
+// ---- Signing (EIP-12 auth protocol) ----
+async function signMessage() {
+    var publicSecret = document.getElementById('public-secret-input').value.trim();
+    if (!publicSecret) {
+        alert('Please enter the public secret.');
+        return;
+    }
+    if (!walletApi) {
+        alert('No wallet connected.');
+        return;
+    }
+
+    var btn = document.getElementById('sign-btn');
+    var statusDiv = document.getElementById('sign-status');
+    btn.disabled = true;
+    btn.textContent = 'Signing...';
+    statusDiv.classList.remove('hidden');
+    statusDiv.innerHTML = '<div class="status-indicator">Waiting for wallet approval...</div>';
+
+    try {
+        // EIP-12: sign_data(address, message_hex) -> { signedMessage, proof }
+        // Encode message as hex
+        var encoder = new TextEncoder();
+        var bytes = encoder.encode(publicSecret);
+        var hexPayload = '';
+        for (var i = 0; i < bytes.length; i++) {
+            hexPayload += bytes[i].toString(16).padStart(2, '0');
+        }
+
+        // Nautilus/EIP-12: auth() or signData() depending on wallet
+        var rawSig = '';
+        if (typeof walletApi.auth === 'function') {
+            // Nautilus auth: returns { signedMessage, proof }
+            var authResult = await walletApi.auth(ergoAddress, publicSecret);
+            rawSig = authResult.proof || authResult.signedMessage || '';
+        } else if (typeof walletApi.sign_data === 'function') {
+            var signResult = await walletApi.sign_data(ergoAddress, hexPayload);
+            rawSig = signResult.proof || signResult.signature || signResult;
+        } else {
+            throw new Error('Wallet does not support message signing (auth or sign_data)');
+        }
+
+        if (!rawSig) throw new Error('No signature returned from wallet');
+
+        // Ensure hex string
+        if (typeof rawSig !== 'string') rawSig = bytesToHex(Array.from(new Uint8Array(rawSig)));
+
+        // Fill hidden form
+        document.getElementById('form-admin-wallet').value = ergoAddress;
+        document.getElementById('form-admin-signature').value = rawSig;
+        document.getElementById('form-public-secret').value = publicSecret;
+
+        // Show confirmed section
+        document.getElementById('confirmed-wallet-name').textContent = walletName;
+        document.getElementById('confirmed-address').textContent = ergoAddress;
+        document.getElementById('section-sign').classList.add('hidden');
+        document.getElementById('section-confirmed').classList.remove('hidden');
+        document.getElementById('section-restore').classList.remove('hidden');
+        document.getElementById('continue-btn').disabled = false;
+
+        statusDiv.classList.add('hidden');
+    } catch (e) {
+        statusDiv.innerHTML = '<div class="status-indicator error">Signing failed: ' + (e.message || e) + '</div>';
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Sign with Wallet';
+    }
+}
+
+// ---- Config restore ----
+function restoreConfig() {
+    var fileInput = document.getElementById('restore-file');
+    var statusDiv = document.getElementById('restore-status');
+
+    if (!fileInput.files || fileInput.files.length === 0) return;
+
+    var formData = new FormData();
+    formData.append('config', fileInput.files[0]);
+
+    var adminSig = document.getElementById('form-admin-signature').value;
+    if (adminSig) {
+        formData.append('admin_signature', adminSig);
+    }
+
+    statusDiv.classList.remove('hidden');
+    statusDiv.innerHTML = '<div class="status-indicator">Restoring configuration...</div>';
+
+    fetch('/api/restore-config', {
+        method: 'POST',
+        body: formData
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+        if (data.error) {
+            statusDiv.innerHTML = '<div class="status-indicator error">Restore failed: ' + data.error + '</div>';
+        } else {
+            statusDiv.innerHTML = '<div class="status-indicator success">Configuration restored. Reloading...</div>';
+            setTimeout(function() { window.location.reload(); }, 1500);
+        }
+    })
+    .catch(function(err) {
+        statusDiv.innerHTML = '<div class="status-indicator error">Error: ' + err.message + '</div>';
+    });
+}
+
+// ---- Init: detect wallets with retry ----
+function detectWithRetry(attempt) {
+    if (attempt > 5) {
+        document.getElementById('no-wallets').classList.remove('hidden');
+        return;
+    }
+    var connector = window.ergoConnector;
+    if (connector && typeof connector === 'object' && Object.keys(connector).length > 0) {
+        detectWallets();
+    } else if (window.ergo) {
+        detectWallets();
+    } else {
+        setTimeout(function() { detectWithRetry(attempt + 1); }, 300 * attempt);
+    }
+}
+
+if (document.readyState === 'complete') {
+    detectWithRetry(0);
+} else {
+    window.addEventListener('load', function() { detectWithRetry(0); });
+}
+</script>
+{% endblock %}
