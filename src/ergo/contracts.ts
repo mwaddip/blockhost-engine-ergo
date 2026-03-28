@@ -57,18 +57,20 @@ const TEMPLATE_PK_HEX = "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f28
  * See scripts/compile-contracts.ts for the compilation tool.
  */
 export const SUBSCRIPTION_ERGO_TREE_TEMPLATE =
-  "100a0400040004000400040005020e210279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798" +
-  "040604480500d81fd601db6903db6503fed602e4c6a70659d6038c720202d6048c720201d605e4c6a7054159d6068c72" +
-  "0502d6078c720602d6089d999591720172037203720172047207d6098c720601d60a9c72087209d60b8c720501d60c95" +
-  "91720a720b720b720ad60d8cb2db6308a773000001d60eb2a5730100d60fdb6308720ed610eded91b1720f7302938cb2" +
-  "720f73030001720d938cb2720f730400027305d611c2720ed612c2a7d6139372117212d614e4c6720e04400ed615e4c6" +
-  "a704400ed6168c721502d617e4c6720e054159d6188c721702d619ededededed938c7214018c721501938c7214027216" +
-  "d801d6197218938c7219017209938c721802720793e4c6720e070ee4c6a7070e93e4c6720e080ee4c6a7080ed61a8c72" +
-  "1701d61be4c6720e0659d61c8c721b02d61dcdee7306d61ecdeeb4721673077308d61f8c721b01eb02eb02eb02ea02d1" +
-  "ed91720c73099592720c720bafa5d9012063afdb63087220d901224d0e948c722201720dededededed72137210721993" +
-  "721a99720b720cd801d620721f9372209a72049c7208720793721c7203721dea02d1afa5d9012063afdb63087220d901" +
-  "224d0e948c722201720d721eea02d1ededededed72137210721992721a720b92721c720393721f7204721eea02d1ed94" +
-  "7211721292c1720ec1a7721d";
+  "100e0400040004000400040004000400050201000e210279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959" +
+  "f2815b16f817980406044805000400d81fd601db6903db6503fed602e4c6a70659d6038c720202d6048c720201d605e4" +
+  "c6a7054159d6068c720502d6078c720602d6089d999591720172037203720172047207d6098c720601d60a9c72087209" +
+  "d60b8c720501d60c9591720a720b720b720ad60d8cb2db6308a773000001d60ec2a7d60fb5a5d9010f6393c2720f720e" +
+  "d610b1720fd6119172107301d612957211b2720f730200b2a5730300d613ededed721191b1db630872127304938cb2db" +
+  "6308721273050001720d938cb2db63087212730600027307d614e4c6a704400ed6158c721402d616c67212054159d617" +
+  "e47216d6188c721702d619957211d803d619e4c6721204400ed61a7216d61b7217ededededed938c7219018c721401" +
+  "938c7219027215d801d61c7218938c721c017209938c721802720793e4c67212070ee4c6a7070e93e4c67212080ee4c6" +
+  "a7080e7308d61ac672120659d61be4721ad61ccdee7309d61dcdeeb47215730a730bd61ec672120659d61fe4721eeb02" +
+  "eb02eb02ea02d1ed91720c730c9592720c720bafa5d9012063afdb63087220d901224d0e948c722201720dededed7211" +
+  "72137219d802d620721ad621721beded938ce4c672120541590199720b720c938c7221019a72049c72087207938c7221" +
+  "027203721cea02d1afa5d9012063afdb63087220d901224d0e948c722201720d721dea02d1ededed721172137219d802" +
+  "d620721ed621721feded928ce4c6721205415901720b928c7221027203938c7221017204721dea02d1ed937210730dae" +
+  "a5d9012063ed94c27220720e92c17220c1a7721c";
 
 // ---------------------------------------------------------------------------
 // ErgoTree constant substitution
@@ -127,7 +129,10 @@ function findPkConstant(
     const typeByte = ergoTreeBytes[pos]!;
     pos++;
 
-    if (typeByte === 0x04) {
+    if (typeByte === 0x01) {
+      // SBoolean — 1 byte value (0 or 1)
+      pos++;
+    } else if (typeByte === 0x04) {
       // SInt — VLQ zigzag encoded, skip the value
       [, pos] = readVLQ(ergoTreeBytes, pos);
     } else if (typeByte === 0x05) {
@@ -273,22 +278,23 @@ export const SUBSCRIPTION_SCRIPT_SOURCE = `{
   val userEncrypted = SELF.R8[Coll[Byte]].get
   val beaconTokenId = SELF.tokens(0)._1
   val currentTime = CONTEXT.preHeader.timestamp
-  val successor = OUTPUTS(0)
-  val sameScript = successor.propositionBytes == SELF.propositionBytes
-  val beaconPreserved = successor.tokens.size > 0 &&
+  val selfScript = SELF.propositionBytes
+  val successors = OUTPUTS.filter { (box: Box) => box.propositionBytes == selfScript }
+  val hasSuccessor = successors.size > 0
+  val successor = if (hasSuccessor) successors(0) else OUTPUTS(0)
+  val beaconPreserved = hasSuccessor && successor.tokens.size > 0 &&
                         successor.tokens(0)._1 == beaconTokenId &&
                         successor.tokens(0)._2 == 1L
-  val successorR4 = successor.R4[(Int, Coll[Byte])].get
-  val successorR5 = successor.R5[(Long, (Long, Long))].get
-  val successorR6 = successor.R6[(Long, Long)].get
-  val immutablePreserved = {
+  val immutablePreserved = if (hasSuccessor) {
+    val successorR4 = successor.R4[(Int, Coll[Byte])].get
+    val successorR5 = successor.R5[(Long, (Long, Long))].get
     successorR4._1 == planId &&
     successorR4._2 == subscriberErgoTree &&
     successorR5._2._1 == ratePerInterval &&
     successorR5._2._2 == intervalMs &&
     successor.R7[Coll[Byte]].get == paymentTokenId &&
     successor.R8[Coll[Byte]].get == userEncrypted
-  }
+  } else false
   val effectiveTime = if (currentTime > expiry) expiry else currentTime
   val elapsedMs = effectiveTime - lastCollected
   val intervals = elapsedMs / intervalMs
@@ -304,10 +310,13 @@ export const SUBSCRIPTION_SCRIPT_SOURCE = `{
         box.tokens.forall { (t: (Coll[Byte], Long)) => t._1 != beaconTokenId }
       }
     } else {
-      sameScript && beaconPreserved && immutablePreserved &&
-      successorR5._1 == amountRemaining - earned &&
-      successorR6._1 == lastCollected + intervals * intervalMs &&
-      successorR6._2 == expiry
+      hasSuccessor && beaconPreserved && immutablePreserved && {
+        val sR5 = successor.R5[(Long, (Long, Long))].get
+        val sR6 = successor.R6[(Long, Long)].get
+        sR5._1 == amountRemaining - earned &&
+        sR6._1 == lastCollected + intervals * intervalMs &&
+        sR6._2 == expiry
+      }
     }
     sigmaProp(validEarn && validContinuation) && proveDlog(serverPk)
   }
@@ -319,16 +328,21 @@ export const SUBSCRIPTION_SCRIPT_SOURCE = `{
     sigmaProp(beaconBurned) && proveDlog(subscriberPk)
   }
   val extendPath = {
-    val validExtension = sameScript && beaconPreserved && immutablePreserved &&
-      successorR5._1 >= amountRemaining &&
-      successorR6._2 >= expiry &&
-      successorR6._1 == lastCollected
+    val validExtension = hasSuccessor && beaconPreserved && immutablePreserved && {
+      val sR5 = successor.R5[(Long, (Long, Long))].get
+      val sR6 = successor.R6[(Long, Long)].get
+      sR5._1 >= amountRemaining &&
+      sR6._2 >= expiry &&
+      sR6._1 == lastCollected
+    }
     sigmaProp(validExtension) && proveDlog(subscriberPk)
   }
   val migratePath = {
-    val differentScript = OUTPUTS(0).propositionBytes != SELF.propositionBytes
-    val valueMaintained = OUTPUTS(0).value >= SELF.value
-    sigmaProp(differentScript && valueMaintained) && proveDlog(serverPk)
+    val noSuccessor = successors.size == 0
+    val anyOutputHasValue = OUTPUTS.exists { (box: Box) =>
+      box.propositionBytes != selfScript && box.value >= SELF.value
+    }
+    sigmaProp(noSuccessor && anyOutputHasValue) && proveDlog(serverPk)
   }
   collectPath || cancelPath || extendPath || migratePath
 }`;
