@@ -389,10 +389,17 @@ class ErgoProviderImpl implements ErgoProvider {
     const limit = 500;
     let offset = 0;
     while (true) {
+      // Use /boxes/byTokenId/{id} (returns both spent and unspent)
+      // and filter for unspent (spentTransactionId === null)
+      // Explorer caps limit at 100 for this endpoint
+      const pageLimit = Math.min(limit, 100);
       const res = await this.explorerGet<ExplorerBoxListResponse>(
-        `/boxes/byTokenId/${tokenId}/unspent?offset=${offset}&limit=${limit}`,
+        `/boxes/byTokenId/${tokenId}?offset=${offset}&limit=${pageLimit}`,
       );
-      all.push(...res.items.map(normalizeExplorerBox));
+      const unspent = res.items.filter(
+        (b) => !(b as any).spentTransactionId,
+      );
+      all.push(...unspent.map(normalizeExplorerBox));
       if (res.items.length < limit) break;
       offset += limit;
     }

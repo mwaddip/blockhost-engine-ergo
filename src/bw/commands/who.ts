@@ -102,8 +102,10 @@ export async function whoCommand(args: string[]): Promise<void> {
     }
 
     // Derive the holder address from the box's ErgoTree
-    const addr = ErgoAddress.fromErgoTree(box.ergoTree);
-    const holderAddress = addr.encode(Network.Mainnet);
+    const isTestnet = (await import("fs")).existsSync("/etc/blockhost/.testing-mode");
+    const network = isTestnet ? Network.Testnet : Network.Mainnet;
+    const addr = ErgoAddress.fromErgoTree(box.ergoTree, network);
+    const holderAddress = addr.encode(network);
 
     console.log(holderAddress);
   } catch (err) {
