@@ -1,0 +1,578 @@
+/**
+ * Subscription event handlers -- provision, extend, and destroy VMs.
+ *
+ * Adapts the Cardano handler pipeline for Ergo's beacon-based detection model.
+ * Input is TrackedSubscription (from the subscription scanner), not a contract event.
+ *
+ * Pipeline for new subscriptions (8 steps):
+ *   1. Decrypt userEncrypted from registers (ECIES with server key)
+ *   2. Reserve token ID (local counter)
+ *   3. Call provisioner: blockhost-vm-create with --owner-wallet and --expiry-days
+ *   4. Parse JSON summary from provisioner stdout
+ *   5. Encrypt connection details (SHAKE256 symmetric)
+ *   6. Call: blockhost-mint-nft with --owner-wallet and --user-encrypted
+ *   7. Call provisioner: blockhost-vm-update-gecos with VM name, wallet, NFT ID
+ *   8. Mark NFT minted in database (Python subprocess)
+ *
+ * VM naming: blockhost-NNN (3-digit zero-padded), auto-incrementing counter.
+ */
+
+import { spawn, spawnSync } from "child_process";
+import * as fs from "node:fs";
+import type { TrackedSubscription } from "../monitor/scanner.js";
+import { eciesDecrypt, symmetricEncrypt, loadServerPrivateKey } from "../crypto.js";
+import { getCommand } from "../provisioner.js";
+import { STATE_DIR, VMS_JSON_PATH, PYTHON_TIMEOUT_MS } from "../paths.js";
+
+// -- Constants ---------------------------------------------------------------
+const SSH_PORT = 22;
+const NEXT_VM_ID_FILE = `${STATE_DIR}/next-vm-id`;
+
+// -- VM ID counter -----------------------------------------------------------
+
+/**
+ * Read the next VM ID from disk, increment, and persist.
+ * Starts at 1 if the file does not exist.
+ */
+function allocateVmId(): number {
+  fs.mkdirSync(STATE_DIR, { recursive: true });
+  const lockPath = NEXT_VM_ID_FILE + ".lock";
+
+  let lockFd = -1;
+  for (let i = 0; i < 50; i++) {
+    try {
+      lockFd = fs.openSync(
+        lockPath,
+        fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY,
+      );
+      break;
+    } catch {
+      if (i === 49) {
+        try { fs.unlinkSync(lockPath); } catch { /* stale lock */ }
+        try {
+          lockFd = fs.openSync(
+            lockPath,
+            fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY,
+          );
+        } catch { /* give up */ }
+        break;
+      }
+      const deadline = Date.now() + 100;
+      while (Date.now() < deadline) { /* brief spin */ }
+    }
+  }
+
+  try {
+    let current = 1;
+    try {
+      const raw = fs.readFileSync(NEXT_VM_ID_FILE, "utf8").trim();
+      const parsed = parseInt(raw, 10);
+      if (!isNaN(parsed) && parsed > 0) current = parsed;
+    } catch {
+      // File does not exist -- start at 1
+    }
+
+    fs.writeFileSync(NEXT_VM_ID_FILE, String(current + 1), "utf8");
+    return current;
+  } finally {
+    if (lockFd >= 0) try { fs.closeSync(lockFd); } catch { /* ignore */ }
+    try { fs.unlinkSync(lockPath); } catch { /* ignore */ }
+  }
+}
+
+/**
+ * Format a VM ID as a VM name: blockhost-001, blockhost-042, etc.
+ */
+function formatVmName(vmId: number): string {
+  return `blockhost-${vmId.toString().padStart(3, "0")}`;
+}
+
+// -- Expiry calculation ------------------------------------------------------
+
+const MS_PER_DAY = 86_400_000n;
+
+/**
+ * Calculate days remaining from the current POSIX ms timestamp until expiry.
+ * Returns at least 1.
+ */
+function calculateExpiryDays(expiry: bigint, currentMs: bigint): number {
+  if (expiry <= currentMs) return 1;
+  const msRemaining = expiry - currentMs;
+  const days = Number(msRemaining / MS_PER_DAY);
+  return Math.max(1, days);
+}
+
+/**
+ * Calculate additional days between two expiry POSIX ms timestamps.
+ */
+function calculateAdditionalDays(oldExpiry: bigint, newExpiry: bigint): number {
+  if (newExpiry <= oldExpiry) return 0;
+  const msDelta = newExpiry - oldExpiry;
+  const days = Number(msDelta / MS_PER_DAY);
+  return Math.max(1, days);
+}
+
+// -- Crypto helpers ----------------------------------------------------------
+
+/**
+ * Decrypt ECIES-encrypted register field using the server private key.
+ * Returns the decrypted plaintext (user signature), or null on failure.
+ */
+function decryptUserSignature(userEncryptedHex: string): string | null {
+  try {
+    const privateKey = loadServerPrivateKey();
+    return eciesDecrypt(privateKey, userEncryptedHex);
+  } catch (err) {
+    console.error(`[ERROR] Failed to decrypt user signature: ${err}`);
+    return null;
+  }
+}
+
+/**
+ * Encrypt connection details with the user's signature as key material.
+ * Returns hex-encoded ciphertext, or null on failure.
+ */
+function encryptConnectionDetails(
+  userSignature: string,
+  hostname: string,
+  username: string,
+): string | null {
+  const connectionDetails = JSON.stringify({
+    hostname,
+    port: SSH_PORT,
+    username,
+  });
+
+  try {
+    return symmetricEncrypt(userSignature, connectionDetails);
+  } catch (err) {
+    console.error(`[ERROR] Failed to encrypt connection details: ${err}`);
+    return null;
+  }
+}
+
+// -- Command runner ----------------------------------------------------------
+
+function runCommand(
+  command: string,
+  args: string[],
+): Promise<{ stdout: string; stderr: string; code: number }> {
+  return new Promise((resolve) => {
+    const proc = spawn(command, args, { cwd: STATE_DIR });
+    let stdout = "";
+    let stderr = "";
+    proc.stdout.on("data", (data: Buffer) => { stdout += data.toString(); });
+    proc.stderr.on("data", (data: Buffer) => { stderr += data.toString(); });
+    proc.on("close", (code) => {
+      resolve({ stdout, stderr, code: code ?? 1 });
+    });
+  });
+}
+
+// -- Output parsers ----------------------------------------------------------
+
+/** Summary JSON emitted by blockhost-vm-create (last JSON line in stdout) */
+interface VmCreateSummary {
+  status: string;
+  vm_name: string;
+  ip: string;
+  ipv6?: string;
+  vmid: number;
+  username: string;
+}
+
+function parseVmSummary(stdout: string): VmCreateSummary | null {
+  const lines = stdout.trim().split("\n");
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i]!.trim();
+    if (line.startsWith("{")) {
+      try {
+        return JSON.parse(line) as VmCreateSummary;
+      } catch {
+        return null;
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Parse the token ID from blockhost-mint-nft stdout.
+ * The mint script prints the token ID (64-char hex) as the only stdout line.
+ */
+function parseMintTokenId(stdout: string): string | null {
+  const trimmed = stdout.trim();
+  // Ergo token IDs are 64-char hex strings
+  if (/^[0-9a-fA-F]{64}$/.test(trimmed)) {
+    return trimmed;
+  }
+  return null;
+}
+
+// -- Database helpers --------------------------------------------------------
+
+/**
+ * Mark an NFT as minted in the VM database (synchronous Python subprocess).
+ */
+function markNftMinted(vmName: string, nftTokenId: string): void {
+  const script = `
+import os
+from blockhost.vm_db import get_database
+db = get_database()
+db.set_nft_minted(os.environ['VM_NAME'], os.environ['NFT_TOKEN_ID'])
+`;
+  const result = spawnSync("python3", ["-c", script], {
+    cwd: STATE_DIR,
+    timeout: PYTHON_TIMEOUT_MS,
+    env: { ...process.env, VM_NAME: vmName, NFT_TOKEN_ID: nftTokenId },
+  });
+  if (result.status !== 0) {
+    const errMsg = result.stderr ? result.stderr.toString().trim() : "";
+    console.error(
+      `[WARN] Failed to mark NFT ${nftTokenId.slice(0, 16)}... as minted in database${errMsg ? ": " + errMsg : ""}`,
+    );
+  }
+}
+
+// -- VM lifecycle helpers ----------------------------------------------------
+
+async function destroyVm(vmName: string): Promise<{ success: boolean; output: string }> {
+  const result = await runCommand(getCommand("destroy"), [vmName]);
+  return {
+    success: result.code === 0,
+    output: (result.code === 0 ? result.stdout : result.stderr || result.stdout).trim(),
+  };
+}
+
+// -- Handler: new subscription -----------------------------------------------
+
+/**
+ * Handle a newly-detected subscription box.
+ *
+ * Allocates a VM ID from the local counter, then runs the full 8-step
+ * provisioning pipeline: decrypt -> create VM -> parse summary -> encrypt
+ * connection details -> mint NFT -> parse token ID -> update GECOS -> mark minted.
+ */
+export async function handleSubscriptionCreated(sub: TrackedSubscription): Promise<void> {
+  const { state, beaconTokenId, boxId } = sub;
+
+  const vmId = allocateVmId();
+  const vmName = formatVmName(vmId);
+  const expiryDays = calculateExpiryDays(state.expiry, BigInt(Date.now()));
+
+  console.log("\n========== SUBSCRIPTION CREATED ==========");
+  console.log(`Beacon:      ${beaconTokenId.slice(0, 16)}...`);
+  console.log(`Box ID:      ${boxId}`);
+  console.log(`Plan ID:     ${state.planId}`);
+  console.log(`Subscriber:  ${state.subscriber}`);
+  console.log(`Expiry (POSIX ms): ${state.expiry}`);
+  console.log(`Amount:      ${state.amountRemaining} (rate: ${state.ratePerInterval}/${state.intervalMs} ms)`);
+  console.log(`User enc:    ${state.userEncrypted.length > 10 ? state.userEncrypted.slice(0, 10) + "..." : state.userEncrypted}`);
+  console.log("------------------------------------------");
+  console.log(`Provisioning VM: ${vmName} (${expiryDays} days)`);
+
+  // Step 1: Decrypt user signature (fail fast before spending time on VM create)
+  let userSignature: string | null = null;
+  if (state.userEncrypted && state.userEncrypted.length > 0) {
+    console.log("Decrypting user signature...");
+    userSignature = decryptUserSignature(state.userEncrypted);
+    if (userSignature) {
+      console.log("User signature decrypted successfully");
+    } else {
+      console.warn("[WARN] Could not decrypt user signature, proceeding without encrypted connection details");
+    }
+  }
+
+  // Step 2: Reserve token ID (handled by mint script, but we track the VM ID here)
+
+  // Step 3: Create VM
+  const createArgs = [
+    vmName,
+    "--owner-wallet", state.subscriber,
+    "--expiry-days", expiryDays.toString(),
+    "--apply",
+  ];
+
+  console.log("Creating VM...");
+  const createResult = await runCommand(getCommand("create"), createArgs);
+
+  if (createResult.code !== 0) {
+    console.error(`[ERROR] Failed to provision VM ${vmName}`);
+    console.error(createResult.stderr || createResult.stdout);
+    console.log("==========================================\n");
+    return;
+  }
+
+  console.log(`[OK] VM ${vmName} provisioned successfully`);
+
+  // Save beacon token ID to vms.json so the scanner can skip it on restart
+  try {
+    const dbPath = VMS_JSON_PATH;
+    if (fs.existsSync(dbPath)) {
+      const db = JSON.parse(fs.readFileSync(dbPath, "utf8")) as Record<string, Record<string, Record<string, unknown>>>;
+      if (db["vms"]?.[vmName]) {
+        db["vms"][vmName]["beacon_token_id"] = beaconTokenId;
+        db["vms"][vmName]["box_id"] = boxId;
+        fs.writeFileSync(dbPath, JSON.stringify(db, null, 2));
+      }
+    }
+  } catch {
+    // Non-fatal -- scanner will re-detect but provisioner will skip existing VM
+  }
+
+  // Step 4: Parse JSON summary from provisioner stdout
+  const summary = parseVmSummary(createResult.stdout);
+  if (!summary) {
+    console.log("[INFO] No JSON summary from provisioner");
+    console.log(createResult.stdout);
+    console.log("==========================================\n");
+    return;
+  }
+
+  console.log(`[INFO] VM summary: ip=${summary.ip}, vmid=${summary.vmid}`);
+
+  // Read IPv6 from vms.json (provisioner writes it there, not always in stdout)
+  let vmIpv6 = summary.ipv6 ?? "";
+  if (!vmIpv6) {
+    try {
+      const dbPath = VMS_JSON_PATH;
+      if (fs.existsSync(dbPath)) {
+        const db = JSON.parse(fs.readFileSync(dbPath, "utf8")) as Record<string, Record<string, Record<string, unknown>>>;
+        vmIpv6 = (db["vms"]?.[vmName]?.["ipv6_address"] as string | undefined) ?? "";
+      }
+    } catch { /* non-fatal */ }
+  }
+
+  // Step 5: Encrypt connection details with user signature
+  let userEncryptedOut = "";
+
+  if (userSignature) {
+    const hostname = vmIpv6 || summary.ip;
+    const encrypted = encryptConnectionDetails(userSignature, hostname, summary.username);
+    if (encrypted) {
+      userEncryptedOut = encrypted;
+      console.log("[OK] Connection details encrypted");
+    } else {
+      console.warn("[WARN] Failed to encrypt connection details, minting without user data");
+    }
+  }
+
+  // Step 6: Mint NFT
+  // The subscriber field is an Ergo Base58 address
+  const mintArgs: string[] = ["--owner-wallet", state.subscriber];
+  if (userEncryptedOut) {
+    // Strip 0x prefix if present -- mint script expects raw hex
+    const cleanHex = userEncryptedOut.startsWith("0x") ? userEncryptedOut.slice(2) : userEncryptedOut;
+    mintArgs.push("--user-encrypted", cleanHex);
+  }
+
+  console.log("Minting NFT...");
+  const mintResult = await runCommand("blockhost-mint-nft", mintArgs);
+
+  if (mintResult.code !== 0) {
+    console.error(`[WARN] NFT minting failed for ${vmName} (VM is still operational)`);
+    console.error(mintResult.stderr || mintResult.stdout);
+    console.error(
+      `[WARN] Retry manually: blockhost-mint-nft --owner-wallet ${state.subscriber} --user-encrypted <hex>`,
+    );
+    console.log("==========================================\n");
+    return;
+  }
+
+  // Parse token ID from mint stdout (Ergo: 64-char hex)
+  const actualTokenId = parseMintTokenId(mintResult.stdout);
+  if (actualTokenId === null) {
+    console.error(`[WARN] Could not parse token ID from mint output: ${mintResult.stdout.trim()}`);
+    console.log("==========================================\n");
+    return;
+  }
+
+  console.log(`[OK] NFT minted for ${vmName} (token ${actualTokenId.slice(0, 16)}...)`);
+
+  // Step 7: Update GECOS with actual token ID
+  const gecosCmd = getCommand("update-gecos");
+  const gecosArgs = [vmName, state.subscriber, "--nft-id", actualTokenId];
+  let gecosUpdated = false;
+  for (let attempt = 1; attempt <= 4; attempt++) {
+    if (attempt > 1) {
+      console.log(`[INFO] Waiting for guest agent (attempt ${attempt}/4)...`);
+      await new Promise((r) => setTimeout(r, 15_000));
+    }
+    const gecosResult = spawnSync(gecosCmd, gecosArgs, { timeout: 30_000, cwd: STATE_DIR });
+    if (gecosResult.status === 0) {
+      console.log(`[OK] GECOS updated for ${vmName}`);
+      gecosUpdated = true;
+      break;
+    }
+    if (attempt === 4) {
+      const errMsg = gecosResult.stderr ? gecosResult.stderr.toString().trim() : "";
+      console.error(`[WARN] update-gecos failed for ${vmName} after ${attempt} attempts${errMsg ? ": " + errMsg : ""}`);
+    }
+  }
+  // Not fatal if GECOS failed -- reconciler will retry on next cycle
+  void gecosUpdated;
+
+  // Step 8: Mark NFT minted in database
+  markNftMinted(vmName, actualTokenId);
+
+  console.log("==========================================\n");
+}
+
+// -- Handler: subscription extended ------------------------------------------
+
+/**
+ * Handle a subscription box that changed to a new box ID (spend-and-recreate).
+ *
+ * The new box carries an updated expiry timestamp and amountRemaining.
+ * We calculate additional days from the delta between old and new expiry,
+ * update the VM database, and resume the VM if it was suspended.
+ */
+export async function handleSubscriptionExtended(
+  old: TrackedSubscription,
+  updated: TrackedSubscription,
+): Promise<void> {
+  const { state: newState, beaconTokenId } = updated;
+
+  console.log("\n========== SUBSCRIPTION EXTENDED ==========");
+  console.log(`Beacon:         ${beaconTokenId.slice(0, 16)}...`);
+  console.log(`Old box:        ${old.boxId}`);
+  console.log(`New box:        ${updated.boxId}`);
+  console.log(`Old expiry (POSIX ms): ${old.state.expiry}`);
+  console.log(`New expiry (POSIX ms): ${newState.expiry}`);
+  console.log(`Old amount:      ${old.state.amountRemaining}`);
+  console.log(`New amount:      ${newState.amountRemaining}`);
+  console.log(`Subscriber:      ${newState.subscriber}`);
+  console.log("-------------------------------------------");
+
+  const additionalDays = calculateAdditionalDays(old.state.expiry, newState.expiry);
+  console.log(`Additional days: ${additionalDays}`);
+
+  // Look up VM by beacon token ID or subscriber, update expiry
+  const script = `
+import os
+from blockhost.vm_db import get_database
+
+beacon_token_id = os.environ['BEACON_TOKEN_ID']
+subscriber = os.environ['SUBSCRIBER']
+additional_days = int(os.environ['ADDITIONAL_DAYS'])
+db = get_database()
+vm = db.get_vm_by_beacon(beacon_token_id) or db.get_vm_by_owner(subscriber)
+if vm:
+    old_status = vm.get('status', 'unknown')
+    db.extend_expiry(vm['vm_name'], additional_days)
+    print(f"Extended {vm['vm_name']} expiry by {additional_days} days")
+    if old_status == 'suspended':
+        print("NEEDS_RESUME")
+    print(f"VM_NAME={vm['vm_name']}")
+else:
+    print(f"VM not found for beacon {beacon_token_id[:16]}... / subscriber {subscriber}")
+`;
+
+  const proc = spawn("python3", ["-c", script], {
+    cwd: STATE_DIR,
+    env: {
+      ...process.env,
+      BEACON_TOKEN_ID: beaconTokenId,
+      SUBSCRIBER: newState.subscriber,
+      ADDITIONAL_DAYS: String(additionalDays),
+    },
+  });
+
+  let output = "";
+  proc.stdout.on("data", (data: Buffer) => { output += data.toString(); });
+  proc.stderr.on("data", (data: Buffer) => { output += data.toString(); });
+
+  const { needsResume, vmName } = await new Promise<{ needsResume: boolean; vmName: string | null }>(
+    (resolve) => {
+      proc.on("close", (code) => {
+        if (code === 0) {
+          const lines = output.trim().split("\n");
+          console.log(`[OK] ${lines[0] ?? ""}`);
+          const vmNameLine = lines.find((l) => l.startsWith("VM_NAME="));
+          const parsedVmName = vmNameLine ? vmNameLine.slice("VM_NAME=".length) : null;
+          resolve({ needsResume: output.includes("NEEDS_RESUME"), vmName: parsedVmName });
+        } else {
+          console.error(`[ERROR] Failed to extend expiry: ${output}`);
+          resolve({ needsResume: false, vmName: null });
+        }
+      });
+    },
+  );
+
+  // Resume VM if it was suspended
+  if (needsResume && vmName) {
+    console.log(`Resuming suspended VM: ${vmName}`);
+    const resumeResult = await runCommand(getCommand("resume"), [vmName]);
+    if (resumeResult.code === 0) {
+      console.log(`[OK] Successfully resumed VM: ${vmName}`);
+      if (resumeResult.stdout.trim()) {
+        console.log(resumeResult.stdout.trim());
+      }
+    } else {
+      console.error(`[WARN] Failed to resume VM ${vmName}`);
+      console.error(`[WARN] ${(resumeResult.stderr || resumeResult.stdout).trim()}`);
+      console.error("[WARN] Operator may need to manually resume the VM");
+    }
+  }
+
+  console.log("===========================================\n");
+}
+
+// -- Handler: subscription removed -------------------------------------------
+
+/**
+ * Handle a subscription box that has disappeared (beacon burned or collected).
+ *
+ * This covers both ServiceCollect (server collected funds) and SubscriberCancel.
+ * In both cases we destroy the VM.
+ */
+export async function handleSubscriptionRemoved(sub: TrackedSubscription): Promise<void> {
+  const { state, beaconTokenId, boxId } = sub;
+
+  console.log("\n========== SUBSCRIPTION REMOVED ==========");
+  console.log(`Beacon:     ${beaconTokenId.slice(0, 16)}...`);
+  console.log(`Box ID:     ${boxId}`);
+  console.log(`Plan ID:    ${state.planId}`);
+  console.log(`Subscriber: ${state.subscriber}`);
+  console.log("------------------------------------------");
+
+  // Look up the VM name by beacon token ID (or subscriber fallback) then destroy
+  const script = `
+import os, sys
+from blockhost.vm_db import get_database
+
+beacon_token_id = os.environ['BEACON_TOKEN_ID']
+subscriber = os.environ['SUBSCRIBER']
+db = get_database()
+vm = db.get_vm_by_beacon(beacon_token_id) or db.get_vm_by_owner(subscriber)
+if vm:
+    print(vm['vm_name'])
+else:
+    sys.exit(1)
+`;
+
+  const lookupResult = spawnSync("python3", ["-c", script], {
+    cwd: STATE_DIR,
+    timeout: PYTHON_TIMEOUT_MS,
+    env: { ...process.env, BEACON_TOKEN_ID: beaconTokenId, SUBSCRIBER: state.subscriber },
+  });
+
+  if (lookupResult.status !== 0) {
+    console.warn(`[WARN] VM not found for beacon ${beaconTokenId.slice(0, 16)}... -- nothing to destroy`);
+    console.log("==========================================\n");
+    return;
+  }
+
+  const vmName = lookupResult.stdout.toString().trim();
+  console.log(`Destroying VM: ${vmName}`);
+
+  const { success, output } = await destroyVm(vmName);
+
+  if (success) {
+    console.log(`[OK] ${output}`);
+  } else {
+    console.error(`[ERROR] Failed to destroy VM ${vmName}: ${output}`);
+  }
+
+  console.log("==========================================\n");
+}
