@@ -46,8 +46,8 @@ const TEMPLATE_PK_HEX = "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f28
  *
  * Register layout on subscription boxes:
  *   R4: (Int, Coll[Byte])          — (planId, subscriberErgoTreeBytes)
- *   R5: (Long, (Long, Long))       — (amountRemaining, (ratePerInterval, intervalMs))
- *   R6: (Long, Long)               — (lastCollected, expiry)
+ *   R5: (Long, (Int, Int))          — (amountRemaining, (ratePerInterval, intervalBlocks))
+ *   R6: (Int, Int)                 — (lastCollectedHeight, expiryHeight)
  *   R7: Coll[Byte]                 — paymentTokenId (empty for native ERG)
  *   R8: Coll[Byte]                 — userEncrypted
  *   tokens(0): beacon token
@@ -57,20 +57,18 @@ const TEMPLATE_PK_HEX = "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f28
  * See scripts/compile-contracts.ts for the compilation tool.
  */
 export const SUBSCRIPTION_ERGO_TREE_TEMPLATE =
-  "100e0400040004000400040004000400050201000e210279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959" +
-  "f2815b16f817980406044805000400d81fd601db6903db6503fed602e4c6a70659d6038c720202d6048c720201d605e4" +
-  "c6a7054159d6068c720502d6078c720602d6089d999591720172037203720172047207d6098c720601d60a9c72087209" +
-  "d60b8c720501d60c9591720a720b720b720ad60d8cb2db6308a773000001d60ec2a7d60fb5a5d9010f6393c2720f720e" +
-  "d610b1720fd6119172107301d612957211b2720f730200b2a5730300d613ededed721191b1db630872127304938cb2db" +
-  "6308721273050001720d938cb2db63087212730600027307d614e4c6a704400ed6158c721402d616c67212054159d617" +
-  "e47216d6188c721702d619957211d803d619e4c6721204400ed61a7216d61b7217ededededed938c7219018c721401" +
-  "938c7219027215d801d61c7218938c721c017209938c721802720793e4c67212070ee4c6a7070e93e4c67212080ee4c6" +
-  "a7080e7308d61ac672120659d61be4721ad61ccdee7309d61dcdeeb47215730a730bd61ec672120659d61fe4721eeb02" +
-  "eb02eb02ea02d1ed91720c730c9592720c720bafa5d9012063afdb63087220d901224d0e948c722201720dededed7211" +
-  "72137219d802d620721ad621721beded938ce4c672120541590199720b720c938c7221019a72049c72087207938c7221" +
-  "027203721cea02d1afa5d9012063afdb63087220d901224d0e948c722201720d721dea02d1ededed721172137219d802" +
-  "d620721ed621721feded928ce4c6721205415901720b928c7221027203938c7221017204721dea02d1ed937210730dae" +
-  "a5d9012063ed94c27220720e92c17220c1a7721c";
+  "100a0400040004000400040005020e210279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f817" +
+  "98040604480500d81ed601e4c6a70658d6028c720102d6038c720101d604e4c6a7054158d6058c720402d6068c720502" +
+  "d6079d999591a372027202a372037206d6088c720501d6099c7e7207057e720805d60a8c720401d60b95917209720a72" +
+  "0a7209d60c8cb2db6308a773000001d60db2a5730100d60edb6308720dd60feded91b1720e7302938cb2720e73030001" +
+  "720c938cb2720e730400027305d610c2720dd611c2a7d6129372107211d613e4c6720d04400ed614e4c6a704400ed615" +
+  "8c721402d616e4c6720d054158d6178c721602d618ededededed938c7213018c721401938c7213027215d801d6187217" +
+  "938c7218017208938c721702720693e4c6720d070ee4c6a7070e93e4c6720d080ee4c6a7080ed6198c721601d61ae4c6" +
+  "720d0658d61b8c721a02d61ccdee7306d61dcdeeb4721573077308d61e8c721a01eb02eb02eb02ea02d1ed91720b7309" +
+  "9592720b720aafa5d9011f63afdb6308721fd901214d0e948c722101720cededededed7212720f721893721999720a72" +
+  "0bd801d61f721e93721f9a72039c7207720693721b7202721cea02d1afa5d9011f63afdb6308721fd901214d0e948c72" +
+  "2101720c721dea02d1ededededed7212720f7218927219720a92721b720293721e7203721dea02d1ed947210721192c1" +
+  "720dc1a7721c";
 
 // ---------------------------------------------------------------------------
 // ErgoTree constant substitution
@@ -267,39 +265,38 @@ export const SUBSCRIPTION_SCRIPT_SOURCE = `{
   val r4 = SELF.R4[(Int, Coll[Byte])].get
   val planId = r4._1
   val subscriberErgoTree = r4._2
-  val r5 = SELF.R5[(Long, (Long, Long))].get
+  val r5 = SELF.R5[(Long, (Int, Int))].get
   val amountRemaining = r5._1
-  val ratePerInterval = r5._2._1
-  val intervalMs = r5._2._2
-  val r6 = SELF.R6[(Long, Long)].get
-  val lastCollected = r6._1
-  val expiry = r6._2
+  val ratePerInterval = r5._2._1.toLong
+  val intervalBlocks = r5._2._2
+  val r6 = SELF.R6[(Int, Int)].get
+  val lastCollectedHeight = r6._1
+  val expiryHeight = r6._2
   val paymentTokenId = SELF.R7[Coll[Byte]].get
   val userEncrypted = SELF.R8[Coll[Byte]].get
   val beaconTokenId = SELF.tokens(0)._1
-  val currentTime = CONTEXT.preHeader.timestamp
-  val selfScript = SELF.propositionBytes
-  val successors = OUTPUTS.filter { (box: Box) => box.propositionBytes == selfScript }
-  val hasSuccessor = successors.size > 0
-  val successor = if (hasSuccessor) successors(0) else OUTPUTS(0)
-  val beaconPreserved = hasSuccessor && successor.tokens.size > 0 &&
+  val currentHeight = HEIGHT
+  val successor = OUTPUTS(0)
+  val sameScript = successor.propositionBytes == SELF.propositionBytes
+  val beaconPreserved = successor.tokens.size > 0 &&
                         successor.tokens(0)._1 == beaconTokenId &&
                         successor.tokens(0)._2 == 1L
-  val immutablePreserved = if (hasSuccessor) {
-    val successorR4 = successor.R4[(Int, Coll[Byte])].get
-    val successorR5 = successor.R5[(Long, (Long, Long))].get
+  val successorR4 = successor.R4[(Int, Coll[Byte])].get
+  val successorR5 = successor.R5[(Long, (Int, Int))].get
+  val successorR6 = successor.R6[(Int, Int)].get
+  val immutablePreserved = {
     successorR4._1 == planId &&
     successorR4._2 == subscriberErgoTree &&
-    successorR5._2._1 == ratePerInterval &&
-    successorR5._2._2 == intervalMs &&
+    successorR5._2._1 == r5._2._1 &&
+    successorR5._2._2 == intervalBlocks &&
     successor.R7[Coll[Byte]].get == paymentTokenId &&
     successor.R8[Coll[Byte]].get == userEncrypted
-  } else false
-  val effectiveTime = if (currentTime > expiry) expiry else currentTime
-  val elapsedMs = effectiveTime - lastCollected
-  val intervals = elapsedMs / intervalMs
+  }
+  val effectiveHeight = if (currentHeight > expiryHeight) expiryHeight else currentHeight
+  val elapsedBlocks = effectiveHeight - lastCollectedHeight
+  val intervals = elapsedBlocks / intervalBlocks
   val earned = {
-    val raw = intervals * ratePerInterval
+    val raw = intervals.toLong * ratePerInterval
     if (raw > amountRemaining) amountRemaining else raw
   }
   val fullyConsumed = earned >= amountRemaining
@@ -310,13 +307,10 @@ export const SUBSCRIPTION_SCRIPT_SOURCE = `{
         box.tokens.forall { (t: (Coll[Byte], Long)) => t._1 != beaconTokenId }
       }
     } else {
-      hasSuccessor && beaconPreserved && immutablePreserved && {
-        val sR5 = successor.R5[(Long, (Long, Long))].get
-        val sR6 = successor.R6[(Long, Long)].get
-        sR5._1 == amountRemaining - earned &&
-        sR6._1 == lastCollected + intervals * intervalMs &&
-        sR6._2 == expiry
-      }
+      sameScript && beaconPreserved && immutablePreserved &&
+      successorR5._1 == amountRemaining - earned &&
+      successorR6._1 == lastCollectedHeight + intervals * intervalBlocks &&
+      successorR6._2 == expiryHeight
     }
     sigmaProp(validEarn && validContinuation) && proveDlog(serverPk)
   }
@@ -328,21 +322,16 @@ export const SUBSCRIPTION_SCRIPT_SOURCE = `{
     sigmaProp(beaconBurned) && proveDlog(subscriberPk)
   }
   val extendPath = {
-    val validExtension = hasSuccessor && beaconPreserved && immutablePreserved && {
-      val sR5 = successor.R5[(Long, (Long, Long))].get
-      val sR6 = successor.R6[(Long, Long)].get
-      sR5._1 >= amountRemaining &&
-      sR6._2 >= expiry &&
-      sR6._1 == lastCollected
-    }
+    val validExtension = sameScript && beaconPreserved && immutablePreserved &&
+      successorR5._1 >= amountRemaining &&
+      successorR6._2 >= expiryHeight &&
+      successorR6._1 == lastCollectedHeight
     sigmaProp(validExtension) && proveDlog(subscriberPk)
   }
   val migratePath = {
-    val noSuccessor = successors.size == 0
-    val anyOutputHasValue = OUTPUTS.exists { (box: Box) =>
-      box.propositionBytes != selfScript && box.value >= SELF.value
-    }
-    sigmaProp(noSuccessor && anyOutputHasValue) && proveDlog(serverPk)
+    val differentScript = OUTPUTS(0).propositionBytes != SELF.propositionBytes
+    val valueMaintained = OUTPUTS(0).value >= SELF.value
+    sigmaProp(differentScript && valueMaintained) && proveDlog(serverPk)
   }
   collectPath || cancelPath || extendPath || migratePath
 }`;

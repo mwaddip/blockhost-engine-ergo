@@ -89,27 +89,29 @@ function formatVmName(vmId: number): string {
 
 // -- Expiry calculation ------------------------------------------------------
 
-const MS_PER_DAY = 86_400_000n;
+
+
+/** Approx blocks per day on Ergo (~2 min block time) */
+const BLOCKS_PER_DAY = 720;
 
 /**
- * Calculate days remaining from the current POSIX ms timestamp until expiry.
+ * Calculate days remaining from current block height until expiry height.
  * Returns at least 1.
  */
-function calculateExpiryDays(expiry: bigint, currentMs: bigint): number {
-  if (expiry <= currentMs) return 1;
-  const msRemaining = expiry - currentMs;
-  const days = Number(msRemaining / MS_PER_DAY);
+function calculateExpiryDays(expiryHeight: number, currentHeight: number): number {
+  if (expiryHeight <= currentHeight) return 1;
+  const blocksRemaining = expiryHeight - currentHeight;
+  const days = Math.floor(blocksRemaining / BLOCKS_PER_DAY);
   return Math.max(1, days);
 }
 
 /**
- * Calculate additional days between two expiry POSIX ms timestamps.
+ * Calculate additional days between two expiry heights.
  */
-function calculateAdditionalDays(oldExpiry: bigint, newExpiry: bigint): number {
-  if (newExpiry <= oldExpiry) return 0;
-  const msDelta = newExpiry - oldExpiry;
-  const days = Number(msDelta / MS_PER_DAY);
-  return Math.max(1, days);
+function calculateAdditionalDays(oldExpiryHeight: number, newExpiryHeight: number): number {
+  if (newExpiryHeight <= oldExpiryHeight) return 0;
+  const blocksDelta = newExpiryHeight - oldExpiryHeight;
+  return Math.max(1, Math.floor(blocksDelta / BLOCKS_PER_DAY));
 }
 
 // -- Crypto helpers ----------------------------------------------------------
@@ -258,15 +260,15 @@ export async function handleSubscriptionCreated(sub: TrackedSubscription): Promi
 
   const vmId = allocateVmId();
   const vmName = formatVmName(vmId);
-  const expiryDays = calculateExpiryDays(state.expiry, BigInt(Date.now()));
+  const expiryDays = calculateExpiryDays(state.expiryHeight, state.creationHeight);
 
   console.log("\n========== SUBSCRIPTION CREATED ==========");
   console.log(`Beacon:      ${beaconTokenId.slice(0, 16)}...`);
   console.log(`Box ID:      ${boxId}`);
   console.log(`Plan ID:     ${state.planId}`);
   console.log(`Subscriber:  ${state.subscriber}`);
-  console.log(`Expiry (POSIX ms): ${state.expiry}`);
-  console.log(`Amount:      ${state.amountRemaining} (rate: ${state.ratePerInterval}/${state.intervalMs} ms)`);
+  console.log(`Expiry height: ${state.expiryHeight}`);
+  console.log(`Amount:      ${state.amountRemaining} (rate: ${state.ratePerInterval}/${state.intervalBlocks} blocks)`);
   console.log(`User enc:    ${state.userEncrypted.length > 10 ? state.userEncrypted.slice(0, 10) + "..." : state.userEncrypted}`);
   console.log("------------------------------------------");
   console.log(`Provisioning VM: ${vmName} (${expiryDays} days)`);
@@ -437,14 +439,14 @@ export async function handleSubscriptionExtended(
   console.log(`Beacon:         ${beaconTokenId.slice(0, 16)}...`);
   console.log(`Old box:        ${old.boxId}`);
   console.log(`New box:        ${updated.boxId}`);
-  console.log(`Old expiry (POSIX ms): ${old.state.expiry}`);
-  console.log(`New expiry (POSIX ms): ${newState.expiry}`);
+  console.log(`Old expiry height: ${old.state.expiryHeight}`);
+  console.log(`New expiry height: ${newState.expiryHeight}`);
   console.log(`Old amount:      ${old.state.amountRemaining}`);
   console.log(`New amount:      ${newState.amountRemaining}`);
   console.log(`Subscriber:      ${newState.subscriber}`);
   console.log("-------------------------------------------");
 
-  const additionalDays = calculateAdditionalDays(old.state.expiry, newState.expiry);
+  const additionalDays = calculateAdditionalDays(old.state.expiryHeight, newState.expiryHeight);
   console.log(`Additional days: ${additionalDays}`);
 
   // Look up VM by beacon token ID or subscriber, update expiry

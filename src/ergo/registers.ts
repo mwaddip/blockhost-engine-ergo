@@ -3,8 +3,8 @@
  *
  * Register layout:
  *   R4: (Int, Coll[Byte])        — (planId, subscriberErgoTreeBytes)
- *   R5: (Long, (Long, Long))     — (amountRemaining, (ratePerInterval, intervalMs))
- *   R6: (Long, Long)             — (lastCollected, expiry)
+ *   R5: (Long, (Int, Int))        — (amountRemaining, (ratePerInterval, intervalBlocks))
+ *   R6: (Int, Int)               — (lastCollectedHeight, expiryHeight)
  *   R7: Coll[Byte]               — paymentTokenId (empty for native ERG)
  *   R8: Coll[Byte]               — userEncrypted
  *
@@ -68,15 +68,15 @@ export function encodeSubscriptionRegisters(
   const ergoTreeBytes = hex.decode(subscriberErgoTree);
   const r4 = SPair(SInt(state.planId), SColl(SByte, ergoTreeBytes));
 
-  // R5: (Long, (Long, Long)) — (amountRemaining, (ratePerInterval, intervalMs))
-  // ErgoScript only supports pairs, not triples — nest as (A, (B, C))
+  // R5: (Long, (Int, Int)) — (amountRemaining, (ratePerInterval, intervalBlocks))
+  // All time references use block height, never timestamps.
   const r5 = SPair(
     SLong(state.amountRemaining),
-    SPair(SLong(state.ratePerInterval), SLong(state.intervalMs)),
+    SPair(SInt(Number(state.ratePerInterval)), SInt(state.intervalBlocks)),
   );
 
-  // R6: (Long, Long) — (lastCollected, expiry)
-  const r6 = SPair(SLong(state.lastCollected), SLong(state.expiry));
+  // R6: (Int, Int) — (lastCollectedHeight, expiryHeight)
+  const r6 = SPair(SInt(state.lastCollectedHeight), SInt(state.expiryHeight));
 
   // R7: Coll[Byte] — paymentTokenId (empty bytes for native ERG)
   const tokenIdBytes = state.paymentTokenId
@@ -133,27 +133,27 @@ export function decodeSubscriptionRegisters(
     }
   }
 
-  // R5: (Long, (Long, Long)) — (amountRemaining, (ratePerInterval, intervalMs))
+  // R5: (Long, (Int, Int)) — (amountRemaining, (ratePerInterval, intervalBlocks))
   const r5Hex = regs["R5"];
   if (r5Hex) {
-    const r5 = decode<[bigint, [bigint, bigint]]>(r5Hex);
+    const r5 = decode<[bigint, [number, number]]>(r5Hex);
     if (r5) {
       result.amountRemaining = r5[0];
       const inner = r5[1];
       if (Array.isArray(inner)) {
-        result.ratePerInterval = inner[0];
-        result.intervalMs = inner[1];
+        result.ratePerInterval = BigInt(inner[0]!);
+        result.intervalBlocks = inner[1]!;
       }
     }
   }
 
-  // R6: (Long, Long) — (lastCollected, expiry)
+  // R6: (Int, Int) — (lastCollectedHeight, expiryHeight)
   const r6Hex = regs["R6"];
   if (r6Hex) {
-    const r6 = decode<[bigint, bigint]>(r6Hex);
+    const r6 = decode<[number, number]>(r6Hex);
     if (r6) {
-      result.lastCollected = r6[0];
-      result.expiry = r6[1];
+      result.lastCollectedHeight = r6[0];
+      result.expiryHeight = r6[1];
     }
   }
 

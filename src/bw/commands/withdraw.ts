@@ -53,7 +53,7 @@ interface ClaimableInfo {
  */
 function analyzeClaimable(
   box: ErgoBox,
-  nowMs: bigint,
+  currentHeight: number,
 ): ClaimableInfo | null {
   const partial = decodeSubscriptionRegisters(box.additionalRegisters);
 
@@ -63,21 +63,22 @@ function analyzeClaimable(
     partial.subscriber === undefined ||
     partial.amountRemaining === undefined ||
     partial.ratePerInterval === undefined ||
-    partial.intervalMs === undefined ||
-    partial.lastCollected === undefined ||
-    partial.expiry === undefined
+    partial.intervalBlocks === undefined ||
+    partial.lastCollectedHeight === undefined ||
+    partial.expiryHeight === undefined
   ) {
     return null;
   }
 
   if (partial.amountRemaining <= 0n) return null;
 
-  // Cap effective time at expiry
-  const effectiveTime = nowMs > partial.expiry ? partial.expiry : nowMs;
-  const elapsed = effectiveTime - partial.lastCollected;
-  if (elapsed < partial.intervalMs) return null;
+  // All time references use block height, never timestamps
+  
+  const effectiveHeight = currentHeight > partial.expiryHeight ? partial.expiryHeight : currentHeight;
+  const elapsedBlocks = effectiveHeight - partial.lastCollectedHeight;
+  if (elapsedBlocks < partial.intervalBlocks) return null;
 
-  const intervals = elapsed / partial.intervalMs;
+  const intervals = BigInt(Math.floor(elapsedBlocks / partial.intervalBlocks));
   let collectAmount = intervals * partial.ratePerInterval;
 
   const fullyConsumed = collectAmount >= partial.amountRemaining;
@@ -92,9 +93,9 @@ function analyzeClaimable(
     subscriber: partial.subscriber,
     amountRemaining: partial.amountRemaining,
     ratePerInterval: partial.ratePerInterval,
-    intervalMs: partial.intervalMs,
-    lastCollected: partial.lastCollected,
-    expiry: partial.expiry,
+    intervalBlocks: partial.intervalBlocks,
+    lastCollectedHeight: partial.lastCollectedHeight,
+    expiryHeight: partial.expiryHeight,
     paymentTokenId: partial.paymentTokenId ?? "",
     beaconTokenId: beaconToken?.tokenId ?? "",
     userEncrypted: partial.userEncrypted ?? "",
@@ -154,11 +155,12 @@ export async function executeWithdraw(
   }
   console.error(`Found ${subscriptionBoxes.length} subscription box(es)`);
 
-  // Analyze claimability
-  const nowMs = BigInt(Date.now());
+  // Analyze claimability using current block height.
+  // The guard script uses HEIGHT which is deterministic.
+  const currentHeight = await provider.getHeight();
   const claimable: ClaimableInfo[] = [];
   for (const box of subscriptionBoxes) {
-    const info = analyzeClaimable(box, nowMs);
+    const info = analyzeClaimable(box, currentHeight);
     if (info) {
       // If a token filter is specified, only include boxes with that paymentTokenId
       if (tokenFilter && info.state.paymentTokenId !== tokenFilter) continue;
@@ -219,8 +221,8 @@ export async function executeWithdraw(
       const updatedState: SubscriptionState = {
         ...info.state,
         amountRemaining: info.state.amountRemaining - info.collectAmount,
-        lastCollected:
-          info.state.lastCollected + info.intervals * info.state.intervalMs,
+        lastCollectedHeight:
+          info.state.lastCollectedHeight + Number(info.intervals) * info.state.intervalBlocks,
       };
 
       const regs = encodeSubscriptionRegisters(updatedState);
