@@ -1,0 +1,131 @@
+/**
+ * Addressbook loading, saving, and resolution utilities (Ergo).
+ *
+ * Addresses are stored as Base58 Ergo addresses (9f..., 3W..., etc.).
+ * No RPC resolution is needed — Base58 addresses are self-contained.
+ */
+
+import * as fs from "fs";
+import type { Addressbook } from "./types.js";
+import { isValidAddress } from "../ergo/address.js";
+import {
+  generateWallet as rootAgentGenerateWallet,
+  addressbookSave,
+} from "../root-agent/client.js";
+import { ADDRESSBOOK_PATH, CONFIG_DIR } from "../paths.js";
+
+const HOT_KEY_PATH = `${CONFIG_DIR}/hot.key`;
+
+/**
+ * Load addressbook from /etc/blockhost/addressbook.json.
+ * Validates all entries have valid Base58 Ergo addresses.
+ * Returns empty object if file does not exist.
+ */
+export function loadAddressbook(): Addressbook {
+  try {
+    if (!fs.existsSync(ADDRESSBOOK_PATH)) {
+      console.error(`[FUND] Addressbook not found: ${ADDRESSBOOK_PATH}`);
+      return {};
+    }
+
+    const data = fs.readFileSync(ADDRESSBOOK_PATH, "utf8");
+    const book = JSON.parse(data) as Addressbook;
+
+    for (const [role, entry] of Object.entries(book)) {
+      if (!isValidAddress(entry.address)) {
+        console.error(
+          `[FUND] Invalid address for role '${role}': ${entry.address}`,
+        );
+        delete book[role];
+      }
+    }
+
+    return book;
+  } catch (err) {
+    console.error(`[FUND] Error loading addressbook: ${err}`);
+    return {};
+  }
+}
+
+/**
+ * Save addressbook via root agent.
+ */
+export async function saveAddressbook(book: Addressbook): Promise<void> {
+  try {
+    await addressbookSave(book as unknown as Record<string, unknown>);
+  } catch (err) {
+    console.error(`[FUND] Error saving addressbook: ${err}`);
+  }
+}
+
+/**
+ * Resolve a role name or Base58 address to an Ergo address string.
+ *
+ * If identifier is already a valid Ergo address, returns it.
+ * Otherwise looks up the role in the addressbook.
+ *
+ * Returns null if neither is found/valid.
+ */
+export function resolveRole(
+  identifier: string,
+  book: Addressbook,
+): string | null {
+  // Direct Base58 address — return as-is
+  if (isValidAddress(identifier)) {
+    return identifier;
+  }
+
+  // Role lookup
+  const entry = book[identifier];
+  if (!entry) {
+    console.error(`[FUND] Role '${identifier}' not found in addressbook`);
+    return null;
+  }
+
+  return entry.address;
+}
+
+/**
+ * Ensure the hot wallet exists in the addressbook.
+ * Generates one via root agent if missing.
+ *
+ * On Ergo, the root agent generates a random secp256k1 private key,
+ * derives the P2PK address, and saves the key to /etc/blockhost/hot.key.
+ */
+export async function ensureHotWallet(book: Addressbook): Promise<Addressbook> {
+  if (book["hot"]) {
+    return book;
+  }
+
+  // If the key file already exists (from a previous run), derive the address
+  // instead of asking the root agent to generate a new one (which would fail).
+  if (fs.existsSync(HOT_KEY_PATH)) {
+    console.log("[FUND] Hot wallet key exists, deriving address...");
+    const privKeyHex = fs.readFileSync(HOT_KEY_PATH, "utf8").trim();
+    const { addressFromPrivateKey } = await import("../ergo/address.js");
+    const { loadNetworkConfig } = await import("./web3-config.js");
+    const config = loadNetworkConfig();
+    const mainnet = config.network === "mainnet";
+    const address = addressFromPrivateKey(privKeyHex, mainnet);
+
+    book["hot"] = {
+      address,
+      keyfile: HOT_KEY_PATH,
+    };
+    await saveAddressbook(book);
+    console.log(`[FUND] Recovered hot wallet: ${address}`);
+    return book;
+  }
+
+  console.log("[FUND] Generating hot wallet via root agent...");
+  const { address } = await rootAgentGenerateWallet("hot");
+
+  book["hot"] = {
+    address,
+    keyfile: HOT_KEY_PATH,
+  };
+
+  await saveAddressbook(book);
+  console.log(`[FUND] Generated hot wallet: ${address}`);
+  return book;
+}
