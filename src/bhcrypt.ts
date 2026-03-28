@@ -8,7 +8,7 @@
  *   generate-keypair    <outfile>                    Generate secp256k1 key + Ergo address
  *   generate-mnemonic                                Generate 15-word BIP39 mnemonic
  *   validate-mnemonic   <word1> <word2> ...          Validate BIP39 mnemonic
- *   mnemonic-to-address [--testnet] <word1> <word2> ... Derive Ergo address from mnemonic
+ *   mnemonic-to-address <word1> <word2> ...          Derive Ergo address from mnemonic
  *   encrypt-symmetric   <key-hex> <data>    SHAKE256-keyed AES-256-GCM encryption
  *   decrypt-symmetric   <key-hex> <ciphertext-hex>   Reverse of above
  *   encrypt-asymmetric  <pubkey-hex> <data> ECIES secp256k1 encryption
@@ -19,6 +19,7 @@
 
 import { eciesDecrypt, eciesEncrypt, symmetricEncrypt, symmetricDecrypt } from "./crypto.js";
 import { addressFromPrivateKey } from "./ergo/address.js";
+import { TESTING_MODE_FILE } from "./paths.js";
 import { secp256k1 } from "@noble/curves/secp256k1";
 import { bytesToHex } from "@noble/hashes/utils";
 import * as fs from "node:fs";
@@ -27,6 +28,9 @@ import { wordlist as english } from "@scure/bip39/wordlists/english.js";
 import { HDKey } from "@scure/bip32";
 
 const ERGO_PATH = "m/44'/429'/0'/0/0"; // EIP-3
+
+/** Mainnet unless /etc/blockhost/.testing-mode exists */
+const IS_MAINNET = !fs.existsSync(TESTING_MODE_FILE);
 
 function die(msg: string): never {
   process.stderr.write(`bhcrypt: ${msg}\n`);
@@ -62,13 +66,12 @@ function main(): void {
 
   switch (command) {
     case "generate-keypair": {
-      const testnetKp = args.includes("--testnet");
-      const outfile = args.filter(a => a !== "--testnet")[1];
-      if (!outfile) die("Usage: bhcrypt generate-keypair [--testnet] <outfile>");
+      const outfile = args[1];
+      if (!outfile) die("Usage: bhcrypt generate-keypair <outfile>");
 
       const privKey = secp256k1.utils.randomPrivateKey();
       const privKeyHex = bytesToHex(privKey);
-      const address = addressFromPrivateKey(privKeyHex, !testnetKp);
+      const address = addressFromPrivateKey(privKeyHex, IS_MAINNET);
 
       fs.writeFileSync(outfile, privKeyHex + "\n", { mode: 0o600 });
       process.stdout.write(`${address}\n`);
@@ -94,14 +97,13 @@ function main(): void {
     }
 
     case "mnemonic-to-address": {
-      const testnetFlag = args.includes("--testnet");
-      const words = args.slice(1).filter(w => w !== "--testnet");
-      if (words.length === 0) die("Usage: bhcrypt mnemonic-to-address [--testnet] <word1> <word2> ...");
+      const words = args.slice(1);
+      if (words.length === 0) die("Usage: bhcrypt mnemonic-to-address <word1> <word2> ...");
       const mnemonic = words.join(" ");
       if (!validateMnemonic(mnemonic, english)) {
         die("invalid mnemonic phrase");
       }
-      const { address } = deriveErgoKey(mnemonic, !testnetFlag);
+      const { address } = deriveErgoKey(mnemonic, IS_MAINNET);
       process.stdout.write(address + "\n");
       break;
     }
@@ -156,7 +158,7 @@ function main(): void {
         "  generate-keypair    <outfile>                    Generate secp256k1 key + Ergo address\n" +
         "  generate-mnemonic                                Generate 15-word BIP39 mnemonic\n" +
         "  validate-mnemonic   <word1> <word2> ...          Validate BIP39 mnemonic\n" +
-        "  mnemonic-to-address [--testnet] <word1> <word2> ... Derive Ergo address from mnemonic\n" +
+        "  mnemonic-to-address <word1> <word2> ...          Derive Ergo address from mnemonic\n" +
         "  encrypt-symmetric   <key-hex> <data>    Symmetric encryption\n" +
         "  decrypt-symmetric   <key-hex> <ciphertext-hex>   Symmetric decryption\n" +
         "  encrypt-asymmetric  <pubkey-hex> <data> ECIES encryption\n" +
