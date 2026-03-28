@@ -285,6 +285,16 @@ export async function executeWithdraw(
     .payMinFee()
     .build();
 
+  // Debug: log output order
+  const eip12 = (unsignedTx as any).toEIP12Object?.() ?? unsignedTx;
+  const outs = (eip12 as any).outputs ?? (eip12 as any)._outputs ?? [];
+  for (let i = 0; i < outs.length; i++) {
+    const o = outs[i];
+    const tree = o.ergoTree?.slice(0, 20) ?? "?";
+    const regs = Object.keys(o.additionalRegisters || {});
+    console.error(`  OUTPUTS[${i}]: tree=${tree}... value=${o.value} regs=[${regs}]`);
+  }
+
   // Sign via node (server key handles the subscription guard script spending proof)
   const signedTx = await provider.signTx(unsignedTx, [privKeyHex]);
   const txId = await provider.submitTx(signedTx);
