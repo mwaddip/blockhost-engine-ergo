@@ -48,10 +48,10 @@ export const SUBSCRIPTION_SCRIPT_TEMPLATE = `{
   val planId = r4._1
   val subscriberErgoTree = r4._2
 
-  val r5 = SELF.R5[(Long, Long, Long)].get
+  val r5 = SELF.R5[(Long, (Long, Long))].get
   val amountRemaining = r5._1
-  val ratePerInterval = r5._2
-  val intervalMs = r5._3
+  val ratePerInterval = r5._2._1
+  val intervalMs = r5._2._2
 
   val r6 = SELF.R6[(Long, Long)].get
   val lastCollected = r6._1
@@ -77,13 +77,13 @@ export const SUBSCRIPTION_SCRIPT_TEMPLATE = `{
 
   // ---- Helper: check successor preserves immutable registers ----
   val successorR4 = successor.R4[(Int, Coll[Byte])].get
-  val successorR5 = successor.R5[(Long, Long, Long)].get
+  val successorR5 = successor.R5[(Long, (Long, Long))].get
   val successorR6 = successor.R6[(Long, Long)].get
   val immutablePreserved = {
     successorR4._1 == planId &&
     successorR4._2 == subscriberErgoTree &&
-    successorR5._2 == ratePerInterval &&
-    successorR5._3 == intervalMs &&
+    successorR5._2._1 == ratePerInterval &&
+    successorR5._2._2 == intervalMs &&
     successor.R7[Coll[Byte]].get == paymentTokenId &&
     successor.R8[Coll[Byte]].get == userEncrypted
   }
@@ -240,7 +240,7 @@ export async function compileToP2SAddress(
   const res = await fetch(url, {
     method: "POST",
     headers,
-    body: JSON.stringify({ source }),
+    body: JSON.stringify({ source, treeVersion: 0 }),
   });
 
   if (!res.ok) {

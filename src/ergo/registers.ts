@@ -3,7 +3,7 @@
  *
  * Register layout:
  *   R4: (Int, Coll[Byte])        — (planId, subscriberErgoTreeBytes)
- *   R5: (Long, Long, Long)       — (amountRemaining, ratePerInterval, intervalMs)
+ *   R5: (Long, (Long, Long))     — (amountRemaining, (ratePerInterval, intervalMs))
  *   R6: (Long, Long)             — (lastCollected, expiry)
  *   R7: Coll[Byte]               — paymentTokenId (empty for native ERG)
  *   R8: Coll[Byte]               — userEncrypted
@@ -12,14 +12,11 @@
  */
 
 import {
-  SConstant,
   SInt,
   SLong,
   SByte,
   SColl,
   SPair,
-  STupleType,
-  SLongType,
   decode,
 } from "@fleet-sdk/serializer";
 import { hex } from "@fleet-sdk/crypto";
@@ -69,11 +66,11 @@ export function encodeSubscriptionRegisters(
   const ergoTreeBytes = hex.decode(subscriberErgoTree);
   const r4 = SPair(SInt(state.planId), SColl(SByte, ergoTreeBytes));
 
-  // R5: (Long, Long, Long) — (amountRemaining, ratePerInterval, intervalMs)
-  // Use SConstant + STupleType for a proper 3-element tuple
-  const r5 = new SConstant(
-    new STupleType([new SLongType(), new SLongType(), new SLongType()]),
-    [state.amountRemaining, state.ratePerInterval, state.intervalMs],
+  // R5: (Long, (Long, Long)) — (amountRemaining, (ratePerInterval, intervalMs))
+  // ErgoScript only supports pairs, not triples — nest as (A, (B, C))
+  const r5 = SPair(
+    SLong(state.amountRemaining),
+    SPair(SLong(state.ratePerInterval), SLong(state.intervalMs)),
   );
 
   // R6: (Long, Long) — (lastCollected, expiry)
@@ -139,14 +136,17 @@ export function decodeSubscriptionRegisters(
     }
   }
 
-  // R5: (Long, Long, Long) — (amountRemaining, ratePerInterval, intervalMs)
+  // R5: (Long, (Long, Long)) — (amountRemaining, (ratePerInterval, intervalMs))
   const r5Hex = regs["R5"];
   if (r5Hex) {
-    const r5 = decode<[bigint, bigint, bigint]>(r5Hex);
+    const r5 = decode<[bigint, [bigint, bigint]]>(r5Hex);
     if (r5) {
       result.amountRemaining = r5[0];
-      result.ratePerInterval = r5[1];
-      result.intervalMs = r5[2];
+      const inner = r5[1];
+      if (Array.isArray(inner)) {
+        result.ratePerInterval = inner[0];
+        result.intervalMs = inner[1];
+      }
     }
   }
 
