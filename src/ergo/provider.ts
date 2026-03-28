@@ -214,10 +214,12 @@ function assertSafePathSegment(value: string, name: string): void {
 class ErgoProviderImpl implements ErgoProvider {
   private readonly nodeUrl: string;
   private readonly explorerUrl: string;
+  private readonly nodeApiKey?: string;
 
-  constructor(nodeUrl: string, explorerUrl: string) {
+  constructor(nodeUrl: string, explorerUrl: string, nodeApiKey?: string) {
     this.nodeUrl = trimUrl(nodeUrl);
     this.explorerUrl = trimUrl(explorerUrl);
+    this.nodeApiKey = nodeApiKey;
   }
 
   private assertSecureForSecrets(): void {
@@ -229,10 +231,16 @@ class ErgoProviderImpl implements ErgoProvider {
 
   // -- Node helpers --
 
+  private nodeHeaders(): Record<string, string> {
+    const h: Record<string, string> = { "Content-Type": "application/json" };
+    if (this.nodeApiKey) h["api_key"] = this.nodeApiKey;
+    return h;
+  }
+
   private async nodeGet<T>(path: string): Promise<T> {
     const url = `${this.nodeUrl}${path}`;
     const res = await fetch(url, {
-      headers: { "Content-Type": "application/json" },
+      headers: this.nodeHeaders(),
     });
     if (!res.ok) {
       const body = await res.text().catch(() => "");
@@ -245,8 +253,10 @@ class ErgoProviderImpl implements ErgoProvider {
     const url = `${this.nodeUrl}${path}`;
     const res = await fetch(url, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
+      headers: this.nodeHeaders(),
+      body: JSON.stringify(body, (_key, value) =>
+        typeof value === "bigint" ? value.toString() : value,
+      ),
     });
     if (!res.ok) {
       const text = await res.text().catch(() => "");
@@ -309,8 +319,12 @@ class ErgoProviderImpl implements ErgoProvider {
     inputsRaw?: string[],
   ): Promise<unknown> {
     this.assertSecureForSecrets();
+    // Convert Fleet SDK tx to EIP-12 format if needed
+    const tx = typeof (unsignedTx as any)?.toEIP12Object === "function"
+      ? (unsignedTx as any).toEIP12Object()
+      : unsignedTx;
     const body: Record<string, unknown> = {
-      tx: unsignedTx,
+      tx,
       secrets: { dlog: secrets },
     };
     if (inputsRaw && inputsRaw.length > 0) {
@@ -403,6 +417,6 @@ class ErgoProviderImpl implements ErgoProvider {
 /**
  * Create an ErgoProvider from node and explorer URLs.
  */
-export function createProvider(nodeUrl: string, explorerUrl: string): ErgoProvider {
-  return new ErgoProviderImpl(nodeUrl, explorerUrl);
+export function createProvider(nodeUrl: string, explorerUrl: string, nodeApiKey?: string): ErgoProvider {
+  return new ErgoProviderImpl(nodeUrl, explorerUrl, nodeApiKey);
 }

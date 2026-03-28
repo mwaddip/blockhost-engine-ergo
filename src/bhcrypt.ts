@@ -62,12 +62,13 @@ function main(): void {
 
   switch (command) {
     case "generate-keypair": {
-      const outfile = args[1];
-      if (!outfile) die("Usage: bhcrypt generate-keypair <outfile>");
+      const testnetKp = args.includes("--testnet");
+      const outfile = args.filter(a => a !== "--testnet")[1];
+      if (!outfile) die("Usage: bhcrypt generate-keypair [--testnet] <outfile>");
 
       const privKey = secp256k1.utils.randomPrivateKey();
       const privKeyHex = bytesToHex(privKey);
-      const address = addressFromPrivateKey(privKeyHex);
+      const address = addressFromPrivateKey(privKeyHex, !testnetKp);
 
       fs.writeFileSync(outfile, privKeyHex + "\n", { mode: 0o600 });
       process.stdout.write(`${address}\n`);

@@ -12,6 +12,7 @@ export interface ErgoNetworkConfig {
   nodeUrl: string;        // e.g. "http://localhost:9053"
   explorerUrl: string;    // e.g. "https://api.ergoplatform.com"
   network: ErgoNetwork;   // "mainnet" or "testnet"
+  nodeApiKey?: string;    // API key for authenticated node endpoints
 }
 
 /**
@@ -29,5 +30,6 @@ export function loadNetworkConfig(): ErgoNetworkConfig {
     nodeUrl: (bc?.["node_url"] as string) ?? "http://localhost:9053",
     explorerUrl: (bc?.["explorer_url"] as string) ?? "https://api.ergoplatform.com",
     network: ((bc?.["network"] as string) ?? "mainnet") as ErgoNetwork,
+    nodeApiKey: (bc?.["node_api_key"] as string) ?? undefined,
   };
 }
