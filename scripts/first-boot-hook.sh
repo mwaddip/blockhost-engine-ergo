@@ -1,7 +1,7 @@
 #!/bin/bash
 # Ergo engine first-boot hook
 #
-# The ergo-signer package (separate .deb) provides signing + P2P broadcast.
+# The ergo-relay package (separate .deb) provides signing + P2P broadcast.
 # It's installed as a dependency and manages its own systemd services.
 #
 # This hook only needs to ensure the signer_url is set in web3-defaults.yaml.

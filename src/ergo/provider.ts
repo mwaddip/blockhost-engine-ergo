@@ -265,7 +265,7 @@ class ErgoProviderImpl implements ErgoProvider {
       endpoints.push(`${this.submitUrl}/transactions`);
     }
 
-    // 2. ergo-signer P2P broadcast (if signer has /transactions endpoint)
+    // 2. ergo-relay P2P broadcast (if signer has /transactions endpoint)
     endpoints.push(`${this.signerUrl}/transactions`);
 
     // 3. Explorer mempool relay
@@ -319,7 +319,7 @@ class ErgoProviderImpl implements ErgoProvider {
     if (inputsRaw && inputsRaw.length > 0) {
       body["inputsRaw"] = inputsRaw;
     }
-    // Sign via ergo-signer (separate from node — no JRE needed)
+    // Sign via ergo-relay (separate from node — no JRE needed)
     const url = `${this.signerUrl}/wallet/transaction/sign`;
     const res = await fetch(url, {
       method: "POST",

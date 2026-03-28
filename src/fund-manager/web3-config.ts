@@ -10,7 +10,7 @@ import type { ErgoNetwork } from "../ergo/types.js";
 
 export interface ErgoNetworkConfig {
   explorerUrl: string;    // e.g. "https://api.ergoplatform.com" — queries + tx submission
-  signerUrl: string;      // e.g. "http://127.0.0.1:9064" — local ergo-signer for tx signing
+  signerUrl: string;      // e.g. "http://127.0.0.1:9064" — local ergo-relay for tx signing
   submitUrl?: string;     // optional: preferred node for tx submission (e.g. "http://node.example.com:9053")
   network: ErgoNetwork;   // "mainnet" or "testnet"
 }

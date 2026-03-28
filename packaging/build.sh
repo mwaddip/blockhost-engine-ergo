@@ -172,7 +172,7 @@ Version: ${VERSION}
 Section: admin
 Priority: optional
 Architecture: all
-Depends: blockhost-common (>= 0.1.0), ergo-signer (>= 0.1.0), nodejs (>= 22), python3 (>= 3.10)
+Depends: blockhost-common (>= 0.1.0), ergo-relay (>= 0.1.0), nodejs (>= 22), python3 (>= 3.10)
 Provides: bhcrypt, blockhost-engine
 Conflicts: blockhost-engine
 Recommends: blockhost-provisioner-proxmox (>= 0.1.0) | blockhost-provisioner-libvirt (>= 0.1.0)
@@ -285,8 +285,8 @@ fi
 cp "$PROJECT_DIR/scripts/signup-template.html" "$PKG_DIR/usr/share/blockhost/"
 cp "$PROJECT_DIR/scripts/signup-engine.js" "$PKG_DIR/usr/share/blockhost/"
 
-# ergo-signer is a separate package (ergo-signer.deb) — not shipped in this .deb
-# The engine depends on it via: Depends: ergo-signer (>= 0.1.0)
+# ergo-relay is a separate package (ergo-relay.deb) — not shipped in this .deb
+# The engine depends on it via: Depends: ergo-relay (>= 0.1.0)
 
 # Systemd services
 cp "$PROJECT_DIR/examples/blockhost-monitor.service" "$PKG_DIR/lib/systemd/system/blockhost-monitor.service"
