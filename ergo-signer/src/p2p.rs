@@ -93,10 +93,10 @@ pub fn build_handshake(agent_name: &str, peer_name: &str, network: Network) -> V
     // Agent name (UTF-8 byte-len prefixed)
     write_utf8_byte_len(&mut buf, agent_name);
 
-    // Protocol version: 3 bytes (use 3.3.6 for broad compatibility)
-    buf.push(3); // major
-    buf.push(3); // minor
-    buf.push(6); // patch
+    // Protocol version: 5.0.12 (match current testnet nodes)
+    buf.push(5); // major
+    buf.push(0); // minor
+    buf.push(12); // patch
 
     // Peer name
     write_utf8_byte_len(&mut buf, peer_name);
@@ -104,8 +104,17 @@ pub fn build_handshake(agent_name: &str, peer_name: &str, network: Network) -> V
     // No public address
     buf.push(0); // hasPublicAddress = false
 
-    // No features (simplest handshake — matches ergo-handshake reference)
-    buf.push(0);
+    // 1 feature: session (id=3) — required for full peer registration
+    buf.push(1); // feature count
+
+    // Session feature: id=3, body = 4 bytes magic + 8 bytes random session ID
+    buf.push(3); // feature id
+    // Body length as unsigned short (2 bytes big-endian)
+    let session_body_len: u16 = 12; // 4 magic + 8 session ID
+    buf.extend_from_slice(&session_body_len.to_be_bytes());
+    buf.extend_from_slice(&network.magic()); // network magic
+    let session_id = rand_u64();
+    buf.extend_from_slice(&session_id.to_be_bytes());
 
     buf
 }
@@ -380,17 +389,19 @@ const TX_TYPE_ID: u8 = 2;
 
 /// Broadcast a signed transaction to a single peer via P2P.
 ///
-/// Flow: handshake → send Inv(txId) → wait for ModifierRequest → send ModifierResponse(txBytes)
+/// Flow:
+///   1. Raw handshake (with session feature containing network magic)
+///   2. Wait for peer's first framed message to learn the session-derived magic
+///   3. Send Inv(txId) with the peer's magic
+///   4. Wait for ModifierRequest → send ModifierResponse(txBytes)
 ///
 /// Returns Ok(()) if the tx was sent, Err if the peer rejected or timed out.
 pub fn broadcast_tx(addr: SocketAddr, network: Network, tx_id: &[u8; 32], tx_bytes: &[u8]) -> std::io::Result<()> {
     let mut stream = TcpStream::connect_timeout(&addr, CONNECT_TIMEOUT)?;
-    stream.set_read_timeout(Some(READ_TIMEOUT))?;
+    stream.set_read_timeout(Some(Duration::from_secs(15)))?;
     stream.set_write_timeout(Some(Duration::from_secs(5)))?;
 
-    let magic = network.magic();
-
-    // 1. Handshake
+    // 1. Handshake (raw, with session feature)
     let hs = build_handshake("blockhost-ergo", "ergo-signer", network);
     stream.write_all(&hs)?;
     stream.flush()?;
@@ -401,59 +412,72 @@ pub fn broadcast_tx(addr: SocketAddr, network: Network, tx_id: &[u8; 32], tx_byt
     if n == 0 {
         return Err(std::io::Error::new(std::io::ErrorKind::ConnectionReset, "Empty handshake"));
     }
-    // Don't need to parse — just confirm we got a response
     eprintln!("  Handshake OK ({} bytes)", n);
 
-    // 2. Send Inv: announce we have a transaction
-    let mut inv_body = Vec::new();
-    inv_body.push(TX_TYPE_ID);   // modifier type = transaction
-    // count as unsigned 4-byte int (VLQ in Ergonnection, but protocol uses u32 for Inv)
-    inv_body.extend_from_slice(&1u32.to_be_bytes()); // 1 element
-    inv_body.extend_from_slice(tx_id);               // 32-byte tx ID
+    // 2. Wait for peer's first framed message to learn the session magic.
+    // After handshake, the peer usually sends SyncInfo (code 65).
+    // The first 4 bytes of that message are the framing magic.
+    std::thread::sleep(Duration::from_secs(3));
+    let mut first_msg = vec![0u8; 4096];
+    let n = stream.read(&mut first_msg)?;
+    if n < 9 {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData,
+            format!("Expected framed message, got {} bytes", n)));
+    }
+    let mut peer_magic = [0u8; 4];
+    peer_magic.copy_from_slice(&first_msg[..4]);
+    eprintln!("  Peer magic: {:02x}{:02x}{:02x}{:02x}, first msg code: {}",
+        peer_magic[0], peer_magic[1], peer_magic[2], peer_magic[3], first_msg[4]);
 
-    let inv_msg = build_message(&magic, MSG_INV, &inv_body);
+    // 3. Send Inv: announce we have a transaction
+    let mut inv_body = Vec::new();
+    inv_body.push(TX_TYPE_ID);                        // modifier type = transaction
+    write_vlq(&mut inv_body, 1);                      // count = 1 (VLQ-encoded)
+    inv_body.extend_from_slice(tx_id);                // 32-byte tx ID
+
+    let inv_msg = build_message(&peer_magic, MSG_INV, &inv_body);
     stream.write_all(&inv_msg)?;
     stream.flush()?;
     eprintln!("  Sent Inv for tx {}", hex_encode(tx_id));
 
-    // 3. Wait for ModifierRequest (peer asks for the tx)
+    // 4. Wait for ModifierRequest (peer asks for the tx)
     let mut got_request = false;
     for _ in 0..10 {
-        match read_message(&mut stream, &magic) {
+        match read_message(&mut stream, &peer_magic) {
             Ok((code, _body)) => {
                 if code == MSG_MODIFIER_REQUEST {
                     got_request = true;
+                    eprintln!("  Got ModifierRequest!");
                     break;
                 }
-                // Peer might send other messages (SyncInfo, etc) — skip
-                eprintln!("  Got message code {} (not ModifierRequest), skipping", code);
+                eprintln!("  Got message code {} (skipping)", code);
             }
             Err(e) => {
-                eprintln!("  Read error waiting for ModifierRequest: {}", e);
+                eprintln!("  Read: {}", e);
                 break;
             }
         }
     }
 
     if !got_request {
-        // Peer didn't request the tx — might already have it or doesn't want it
-        // Still try sending it unsolicited as ModifierResponse
         eprintln!("  No ModifierRequest received, sending unsolicited");
     }
 
-    // 4. Send ModifierResponse with the serialized tx
+    // 5. Send ModifierResponse with the serialized tx
     let mut mod_body = Vec::new();
     mod_body.push(TX_TYPE_ID);                        // modifier type
-    mod_body.extend_from_slice(&1u32.to_be_bytes());  // count = 1
+    write_vlq(&mut mod_body, 1);                      // count = 1 (VLQ)
     mod_body.extend_from_slice(tx_id);                // 32-byte ID
-    mod_body.extend_from_slice(&(tx_bytes.len() as u32).to_be_bytes()); // body length
+    write_vlq(&mut mod_body, tx_bytes.len() as u64);  // body length (VLQ)
     mod_body.extend_from_slice(tx_bytes);             // serialized tx
 
-    let mod_msg = build_message(&magic, MSG_MODIFIER_RESPONSE, &mod_body);
+    let mod_msg = build_message(&peer_magic, MSG_MODIFIER_RESPONSE, &mod_body);
     stream.write_all(&mod_msg)?;
     stream.flush()?;
     eprintln!("  Sent tx ({} bytes)", tx_bytes.len());
 
+    // Give the peer a moment to process before disconnecting
+    std::thread::sleep(Duration::from_secs(1));
     let _ = stream.shutdown(std::net::Shutdown::Both);
     Ok(())
 }
