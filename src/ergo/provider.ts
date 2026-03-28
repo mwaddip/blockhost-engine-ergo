@@ -183,10 +183,12 @@ function assertSafePathSegment(value: string, name: string): void {
 class ErgoProviderImpl implements ErgoProvider {
   private readonly explorerUrl: string;
   private readonly signerUrl: string;
+  private readonly submitUrl?: string;
 
-  constructor(explorerUrl: string, signerUrl?: string) {
+  constructor(explorerUrl: string, signerUrl?: string, submitUrl?: string) {
     this.explorerUrl = trimUrl(explorerUrl);
     this.signerUrl = trimUrl(signerUrl ?? "http://127.0.0.1:9064");
+    this.submitUrl = submitUrl ? trimUrl(submitUrl) : undefined;
   }
 
   private assertSecureForSecrets(): void {
@@ -251,52 +253,50 @@ class ErgoProviderImpl implements ErgoProvider {
   }
 
   async submitTx(signedTx: unknown): Promise<string> {
-    // Submit via explorer's mempool relay, fall back to public node
     const txJson = JSON.stringify(signedTx, (_key, value) =>
       typeof value === "bigint" ? value.toString() : value,
     );
 
-    // Try explorer submission first
-    try {
-      const url = `${this.explorerUrl}/api/v1/mempool/transactions/submit`;
-      const res = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: txJson,
-        signal: AbortSignal.timeout(15_000),
-      });
-      if (res.ok) {
-        const data = await res.json() as { id: string } | string;
-        return typeof data === "string" ? data : data.id;
-      }
-      // Non-timeout failure — likely a real tx error, don't retry
-      const text = await res.text().catch(() => "");
-      if (res.status === 400) {
-        throw new Error(`Transaction rejected (${res.status}): ${text}`);
-      }
-    } catch (err) {
-      // Timeout or network error — fall through to node submission
-      if (err instanceof Error && err.message.startsWith("Transaction rejected")) throw err;
+    // Build list of submission endpoints to try in order
+    const endpoints: string[] = [];
+
+    // 1. Configured submit_url (if set — e.g. a known reliable node)
+    if (this.submitUrl) {
+      endpoints.push(`${this.submitUrl}/transactions`);
     }
 
-    // Fall back to the local Ergo node if available (port 9053 mainnet, 9052 testnet)
-    for (const port of [9053, 9052]) {
+    // 2. Explorer mempool relay
+    endpoints.push(`${this.explorerUrl}/api/v1/mempool/transactions/submit`);
+
+    // 3. Local Ergo node (if running)
+    endpoints.push("http://127.0.0.1:9053/transactions");
+    endpoints.push("http://127.0.0.1:9052/transactions");
+
+    for (const url of endpoints) {
       try {
-        const url = `http://127.0.0.1:${port}/transactions`;
         const res = await fetch(url, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: txJson,
-          signal: AbortSignal.timeout(10_000),
+          signal: AbortSignal.timeout(15_000),
         });
         if (res.ok) {
-          const txId = await res.json() as string;
-          return txId;
+          const data = await res.json() as { id: string } | string;
+          return typeof data === "string" ? data : data.id;
         }
-      } catch { /* try next */ }
+        // 400 = tx rejected (bad tx, not a connectivity issue)
+        if (res.status === 400) {
+          const text = await res.text().catch(() => "");
+          throw new Error(`Transaction rejected: ${text}`);
+        }
+        // Other errors (403, 500, etc) — try next endpoint
+      } catch (err) {
+        if (err instanceof Error && err.message.startsWith("Transaction rejected")) throw err;
+        // Timeout or network error — try next
+      }
     }
 
-    throw new Error("Transaction submission failed: explorer timed out and no local node available");
+    throw new Error("Transaction submission failed: all endpoints unreachable");
   }
 
   async signTx(
@@ -417,6 +417,7 @@ class ErgoProviderImpl implements ErgoProvider {
 export function createProvider(
   explorerUrl: string,
   signerUrl?: string,
+  submitUrl?: string,
 ): ErgoProvider {
-  return new ErgoProviderImpl(explorerUrl, signerUrl);
+  return new ErgoProviderImpl(explorerUrl, signerUrl, submitUrl);
 }

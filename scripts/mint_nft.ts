@@ -186,7 +186,7 @@ async function main(): Promise<void> {
   process.stderr.write(`Network:        ${config.network}\n`);
 
   // Create provider
-  const provider = createProvider(config.explorerUrl, config.signerUrl);
+  const provider = createProvider(config.explorerUrl, config.signerUrl, config.submitUrl);
 
   // Get current height
   const currentHeight = await provider.getHeight();
