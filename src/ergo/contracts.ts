@@ -46,7 +46,7 @@ const TEMPLATE_PK_HEX = "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f28
  *
  * Register layout on subscription boxes:
  *   R4: (Int, Coll[Byte])          — (planId, subscriberErgoTreeBytes)
- *   R5: (Long, (Int, Int))          — (amountRemaining, (ratePerInterval, intervalBlocks))
+ *   R5: (Long, (Long, Int))         — (amountRemaining, (ratePerInterval, intervalBlocks))
  *   R6: (Int, Int)                 — (lastCollectedHeight, expiryHeight)
  *   R7: Coll[Byte]                 — paymentTokenId (empty for native ERG)
  *   R8: Coll[Byte]                 — userEncrypted
@@ -58,11 +58,11 @@ const TEMPLATE_PK_HEX = "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f28
  */
 export const SUBSCRIPTION_ERGO_TREE_TEMPLATE =
   "100a0400040004000400040005020e210279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f817" +
-  "98040604480500d81ed601e4c6a70658d6028c720102d6038c720101d604e4c6a7054158d6058c720402d6068c720502" +
-  "d6079d999591a372027202a372037206d6088c720501d6099c7e7207057e720805d60a8c720401d60b95917209720a72" +
-  "0a7209d60c8cb2db6308a773000001d60db2a5730100d60edb6308720dd60feded91b1720e7302938cb2720e73030001" +
-  "720c938cb2720e730400027305d610c2720dd611c2a7d6129372107211d613e4c6720d04400ed614e4c6a704400ed615" +
-  "8c721402d616e4c6720d054158d6178c721602d618ededededed938c7213018c721401938c7213027215d801d6187217" +
+  "98040604480500d81ed601e4c6a70658d6028c720102d6038c720101d604e4c6a705414104d6058c720402d6068c7205" +
+  "02d6079d999591a372027202a372037206d6088c720501d6099c7e7207057208d60a8c720401d60b95917209720a720a" +
+  "7209d60c8cb2db6308a773000001d60db2a5730100d60edb6308720dd60feded91b1720e7302938cb2720e7303000172" +
+  "0c938cb2720e730400027305d610c2720dd611c2a7d6129372107211d613e4c6720d04400ed614e4c6a704400ed6158c" +
+  "721402d616e4c6720d05414104d6178c721602d618ededededed938c7213018c721401938c7213027215d801d6187217" +
   "938c7218017208938c721702720693e4c6720d070ee4c6a7070e93e4c6720d080ee4c6a7080ed6198c721601d61ae4c6" +
   "720d0658d61b8c721a02d61ccdee7306d61dcdeeb4721573077308d61e8c721a01eb02eb02eb02ea02d1ed91720b7309" +
   "9592720b720aafa5d9011f63afdb6308721fd901214d0e948c722101720cededededed7212720f721893721999720a72" +
@@ -265,9 +265,9 @@ export const SUBSCRIPTION_SCRIPT_SOURCE = `{
   val r4 = SELF.R4[(Int, Coll[Byte])].get
   val planId = r4._1
   val subscriberErgoTree = r4._2
-  val r5 = SELF.R5[(Long, (Int, Int))].get
+  val r5 = SELF.R5[(Long, (Long, Int))].get
   val amountRemaining = r5._1
-  val ratePerInterval = r5._2._1.toLong
+  val ratePerInterval = r5._2._1
   val intervalBlocks = r5._2._2
   val r6 = SELF.R6[(Int, Int)].get
   val lastCollectedHeight = r6._1
@@ -282,7 +282,7 @@ export const SUBSCRIPTION_SCRIPT_SOURCE = `{
                         successor.tokens(0)._1 == beaconTokenId &&
                         successor.tokens(0)._2 == 1L
   val successorR4 = successor.R4[(Int, Coll[Byte])].get
-  val successorR5 = successor.R5[(Long, (Int, Int))].get
+  val successorR5 = successor.R5[(Long, (Long, Int))].get
   val successorR6 = successor.R6[(Int, Int)].get
   val immutablePreserved = {
     successorR4._1 == planId &&

@@ -312,9 +312,16 @@ class ErgoProviderImpl implements ErgoProvider {
     const tx = typeof (unsignedTx as any)?.toEIP12Object === "function"
       ? (unsignedTx as any).toEIP12Object()
       : unsignedTx;
+    // Fetch current height for scripts that use HEIGHT (like subscription guard)
+    let height: number | undefined;
+    try {
+      height = await this.getHeight();
+    } catch { /* non-fatal — signer will use 0 */ }
+
     const body: Record<string, unknown> = {
       tx,
       secrets: { dlog: secrets },
+      height,
     };
     if (inputsRaw && inputsRaw.length > 0) {
       body["inputsRaw"] = inputsRaw;

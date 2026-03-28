@@ -3,7 +3,7 @@
  *
  * Ergo subscription state lives in box registers R4-R9:
  *   R4: (planId: Int, subscriber: Coll[Byte])
- *   R5: (amountRemaining: Long, (ratePerInterval: Long, intervalBlocks: Int))
+ *   R5: (amountRemaining: Long, (ratePerInterval: Long, intervalBlocks: Int))  — rate is Long to avoid overflow
  *   R6: (lastCollectedHeight: Int, expiryHeight: Int)
  *   R7: paymentTokenId: Coll[Byte]  — empty for native ERG
  *   R8: userEncrypted: Coll[Byte]

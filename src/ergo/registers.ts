@@ -3,7 +3,7 @@
  *
  * Register layout:
  *   R4: (Int, Coll[Byte])        — (planId, subscriberErgoTreeBytes)
- *   R5: (Long, (Int, Int))        — (amountRemaining, (ratePerInterval, intervalBlocks))
+ *   R5: (Long, (Long, Int))       — (amountRemaining, (ratePerInterval, intervalBlocks))
  *   R6: (Int, Int)               — (lastCollectedHeight, expiryHeight)
  *   R7: Coll[Byte]               — paymentTokenId (empty for native ERG)
  *   R8: Coll[Byte]               — userEncrypted
@@ -68,11 +68,12 @@ export function encodeSubscriptionRegisters(
   const ergoTreeBytes = hex.decode(subscriberErgoTree);
   const r4 = SPair(SInt(state.planId), SColl(SByte, ergoTreeBytes));
 
-  // R5: (Long, (Int, Int)) — (amountRemaining, (ratePerInterval, intervalBlocks))
-  // All time references use block height, never timestamps.
+  // R5: (Long, (Long, Int)) — (amountRemaining, (ratePerInterval, intervalBlocks))
+  // ratePerInterval is Long to avoid Int overflow in earned calculation.
+  // intervalBlocks is Int (block count fits in 32 bits).
   const r5 = SPair(
     SLong(state.amountRemaining),
-    SPair(SInt(Number(state.ratePerInterval)), SInt(state.intervalBlocks)),
+    SPair(SLong(state.ratePerInterval), SInt(state.intervalBlocks)),
   );
 
   // R6: (Int, Int) — (lastCollectedHeight, expiryHeight)
@@ -133,16 +134,16 @@ export function decodeSubscriptionRegisters(
     }
   }
 
-  // R5: (Long, (Int, Int)) — (amountRemaining, (ratePerInterval, intervalBlocks))
+  // R5: (Long, (Long, Int)) — (amountRemaining, (ratePerInterval, intervalBlocks))
   const r5Hex = regs["R5"];
   if (r5Hex) {
-    const r5 = decode<[bigint, [number, number]]>(r5Hex);
+    const r5 = decode<[bigint, [bigint, number]]>(r5Hex);
     if (r5) {
       result.amountRemaining = r5[0];
       const inner = r5[1];
       if (Array.isArray(inner)) {
-        result.ratePerInterval = BigInt(inner[0]!);
-        result.intervalBlocks = inner[1]!;
+        result.ratePerInterval = inner[0]!;
+        result.intervalBlocks = Number(inner[1]!);
       }
     }
   }
