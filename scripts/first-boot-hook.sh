@@ -1,18 +1,10 @@
 #!/bin/bash
 # Ergo engine first-boot hook
 #
-# Installs the ergo-signer service for transaction signing.
-# The ergo-signer binary is shipped in the .deb — no downloads needed.
+# The ergo-signer package (separate .deb) provides signing + P2P broadcast.
+# It's installed as a dependency and manages its own systemd services.
 #
-# The Ergo node (for UTXO queries and tx submission) is configured via
-# blockchain.node_url in web3-defaults.yaml. The operator can:
-#   - Run a local Ergo node (install separately, recommended)
-#   - Point to a remote node in their infrastructure
-#   - Use a public node endpoint
-#
-# The engine does not install or manage the Ergo node itself — that's
-# infrastructure, not engine responsibility. The engine only needs a
-# URL that answers /blockchain/box/* and /transactions endpoints.
+# This hook only needs to ensure the signer_url is set in web3-defaults.yaml.
 
 set -e
 
@@ -20,21 +12,7 @@ LOG_FILE="${LOG_FILE:-/var/log/blockhost-first-boot.log}"
 
 log() { echo "[ergo] $*" | tee -a "$LOG_FILE"; }
 
-# ── Enable and start ergo-signer ────────────────────────────────────
-# The binary and systemd unit are installed by the .deb package at:
-#   /usr/share/blockhost/ergo-signer
-#   /lib/systemd/system/ergo-signer.service
-
-if [ -f /usr/share/blockhost/ergo-signer ]; then
-  systemctl daemon-reload
-  systemctl enable ergo-signer
-  systemctl start ergo-signer
-  log "ergo-signer service started on port 9064"
-else
-  log "WARNING: ergo-signer binary not found at /usr/share/blockhost/ergo-signer"
-fi
-
-# ── Ensure signer_url is in web3-defaults ───────────────────────────
+# Ensure signer_url is in web3-defaults
 if [ -f /etc/blockhost/web3-defaults.yaml ]; then
   if ! grep -q "signer_url" /etc/blockhost/web3-defaults.yaml; then
     python3 -c "
