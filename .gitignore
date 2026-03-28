@@ -16,6 +16,10 @@ target/
 packaging/*.deb
 package-lock.json
 
+# Python bytecode
+__pycache__/
+*.pyc
+
 # Tool artifacts
 .agents/
 .claude/
