@@ -130,13 +130,15 @@ fn dummy_state_context() -> ergo_lib::chain::ergo_state_context::ErgoStateContex
         "stateRoot": "000000000000000000000000000000000000000000000000000000000000000000",
         "transactionsRoot": "0000000000000000000000000000000000000000000000000000000000000000",
         "timestamp": 0u64,
-        "nBits": 0u64,
+        "nBits": 16842752u64,
         "height": 0u32,
-        "extensionRoot": "0000000000000000000000000000000000000000000000000000000000000000",
-        "minerPk": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
-        "powOnetimePk": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
-        "powNonce": "0000000000000000",
-        "powDistance": "0",
+        "extensionHash": "0000000000000000000000000000000000000000000000000000000000000000",
+        "powSolutions": {
+            "pk": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+            "w": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+            "n": "0000000000000000",
+            "d": 0
+        },
         "votes": "000000"
     });
     let h: ergo_chain_types::Header =

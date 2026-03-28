@@ -9,10 +9,11 @@ import { WEB3_DEFAULTS_PATH } from "../paths.js";
 import type { ErgoNetwork } from "../ergo/types.js";
 
 export interface ErgoNetworkConfig {
-  nodeUrl: string;        // e.g. "http://localhost:9053"
-  explorerUrl: string;    // e.g. "https://api.ergoplatform.com"
+  nodeUrl: string;        // e.g. "http://localhost:9053" — for indexed queries and tx submission
+  explorerUrl: string;    // e.g. "https://api.ergoplatform.com" — for token/balance/box queries
+  signerUrl: string;      // e.g. "http://127.0.0.1:9064" — local ergo-signer for tx signing
   network: ErgoNetwork;   // "mainnet" or "testnet"
-  nodeApiKey?: string;    // API key for authenticated node endpoints
+  nodeApiKey?: string;    // API key for authenticated node endpoints (if using full node)
 }
 
 /**
@@ -29,6 +30,7 @@ export function loadNetworkConfig(): ErgoNetworkConfig {
   return {
     nodeUrl: (bc?.["node_url"] as string) ?? "http://localhost:9053",
     explorerUrl: (bc?.["explorer_url"] as string) ?? "https://api.ergoplatform.com",
+    signerUrl: (bc?.["signer_url"] as string) ?? "http://127.0.0.1:9064",
     network: ((bc?.["network"] as string) ?? "mainnet") as ErgoNetwork,
     nodeApiKey: (bc?.["node_api_key"] as string) ?? undefined,
   };

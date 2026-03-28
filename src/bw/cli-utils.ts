@@ -117,8 +117,8 @@ function resolveStableToken(): ErgoTokenId {
  * Get an ErgoProvider configured from web3-defaults.yaml.
  */
 export function getProviderClient(): ErgoProvider {
-  const { nodeUrl, explorerUrl, nodeApiKey } = loadNetworkConfig();
-  return createProvider(nodeUrl, explorerUrl, nodeApiKey);
+  const { nodeUrl, explorerUrl, signerUrl, nodeApiKey } = loadNetworkConfig();
+  return createProvider(nodeUrl, explorerUrl, signerUrl, nodeApiKey);
 }
 
 // ── Formatting helpers ────────────────────────────────────────────────────────

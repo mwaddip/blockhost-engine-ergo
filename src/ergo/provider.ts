@@ -214,18 +214,20 @@ function assertSafePathSegment(value: string, name: string): void {
 class ErgoProviderImpl implements ErgoProvider {
   private readonly nodeUrl: string;
   private readonly explorerUrl: string;
+  private readonly signerUrl: string;
   private readonly nodeApiKey?: string;
 
-  constructor(nodeUrl: string, explorerUrl: string, nodeApiKey?: string) {
+  constructor(nodeUrl: string, explorerUrl: string, signerUrl?: string, nodeApiKey?: string) {
     this.nodeUrl = trimUrl(nodeUrl);
     this.explorerUrl = trimUrl(explorerUrl);
+    this.signerUrl = trimUrl(signerUrl ?? "http://127.0.0.1:9064");
     this.nodeApiKey = nodeApiKey;
   }
 
   private assertSecureForSecrets(): void {
-    const url = new URL(this.nodeUrl);
+    const url = new URL(this.signerUrl);
     if (url.protocol !== "https:" && !["localhost", "127.0.0.1", "::1"].includes(url.hostname)) {
-      throw new Error("Refusing to send secrets to a non-localhost HTTP node. Use HTTPS or localhost.");
+      throw new Error("Refusing to send secrets to a non-localhost HTTP signer. Use HTTPS or localhost.");
     }
   }
 
@@ -330,7 +332,20 @@ class ErgoProviderImpl implements ErgoProvider {
     if (inputsRaw && inputsRaw.length > 0) {
       body["inputsRaw"] = inputsRaw;
     }
-    return this.nodePost<unknown>("/wallet/transaction/sign", body);
+    // Sign via ergo-signer (separate from node — no JRE needed)
+    const url = `${this.signerUrl}/wallet/transaction/sign`;
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body, (_key, value) =>
+        typeof value === "bigint" ? value.toString() : value,
+      ),
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new Error(`Signer POST /wallet/transaction/sign failed (${res.status}): ${text}`);
+    }
+    return (await res.json()) as unknown;
   }
 
   async getToken(tokenId: string): Promise<TokenInfo> {
@@ -417,6 +432,11 @@ class ErgoProviderImpl implements ErgoProvider {
 /**
  * Create an ErgoProvider from node and explorer URLs.
  */
-export function createProvider(nodeUrl: string, explorerUrl: string, nodeApiKey?: string): ErgoProvider {
-  return new ErgoProviderImpl(nodeUrl, explorerUrl, nodeApiKey);
+export function createProvider(
+  nodeUrl: string,
+  explorerUrl: string,
+  signerUrl?: string,
+  nodeApiKey?: string,
+): ErgoProvider {
+  return new ErgoProviderImpl(nodeUrl, explorerUrl, signerUrl, nodeApiKey);
 }
