@@ -370,6 +370,167 @@ fn parse_handshake_peer_entry(cursor: &mut Cursor<&[u8]>) -> std::io::Result<Opt
 }
 
 // ---------------------------------------------------------------------------
+// Transaction broadcast
+// ---------------------------------------------------------------------------
+
+const MSG_INV: u8 = 55;
+const MSG_MODIFIER_REQUEST: u8 = 22;
+const MSG_MODIFIER_RESPONSE: u8 = 33;
+const TX_TYPE_ID: u8 = 2;
+
+/// Broadcast a signed transaction to a single peer via P2P.
+///
+/// Flow: handshake → send Inv(txId) → wait for ModifierRequest → send ModifierResponse(txBytes)
+///
+/// Returns Ok(()) if the tx was sent, Err if the peer rejected or timed out.
+pub fn broadcast_tx(addr: SocketAddr, network: Network, tx_id: &[u8; 32], tx_bytes: &[u8]) -> std::io::Result<()> {
+    let mut stream = TcpStream::connect_timeout(&addr, CONNECT_TIMEOUT)?;
+    stream.set_read_timeout(Some(READ_TIMEOUT))?;
+    stream.set_write_timeout(Some(Duration::from_secs(5)))?;
+
+    let magic = network.magic();
+
+    // 1. Handshake
+    let hs = build_handshake("blockhost-ergo", "ergo-signer", network);
+    stream.write_all(&hs)?;
+    stream.flush()?;
+
+    std::thread::sleep(Duration::from_millis(500));
+    let mut hs_buf = vec![0u8; 4096];
+    let n = stream.read(&mut hs_buf)?;
+    if n == 0 {
+        return Err(std::io::Error::new(std::io::ErrorKind::ConnectionReset, "Empty handshake"));
+    }
+    // Don't need to parse — just confirm we got a response
+    eprintln!("  Handshake OK ({} bytes)", n);
+
+    // 2. Send Inv: announce we have a transaction
+    let mut inv_body = Vec::new();
+    inv_body.push(TX_TYPE_ID);   // modifier type = transaction
+    // count as unsigned 4-byte int (VLQ in Ergonnection, but protocol uses u32 for Inv)
+    inv_body.extend_from_slice(&1u32.to_be_bytes()); // 1 element
+    inv_body.extend_from_slice(tx_id);               // 32-byte tx ID
+
+    let inv_msg = build_message(&magic, MSG_INV, &inv_body);
+    stream.write_all(&inv_msg)?;
+    stream.flush()?;
+    eprintln!("  Sent Inv for tx {}", hex_encode(tx_id));
+
+    // 3. Wait for ModifierRequest (peer asks for the tx)
+    let mut got_request = false;
+    for _ in 0..10 {
+        match read_message(&mut stream, &magic) {
+            Ok((code, _body)) => {
+                if code == MSG_MODIFIER_REQUEST {
+                    got_request = true;
+                    break;
+                }
+                // Peer might send other messages (SyncInfo, etc) — skip
+                eprintln!("  Got message code {} (not ModifierRequest), skipping", code);
+            }
+            Err(e) => {
+                eprintln!("  Read error waiting for ModifierRequest: {}", e);
+                break;
+            }
+        }
+    }
+
+    if !got_request {
+        // Peer didn't request the tx — might already have it or doesn't want it
+        // Still try sending it unsolicited as ModifierResponse
+        eprintln!("  No ModifierRequest received, sending unsolicited");
+    }
+
+    // 4. Send ModifierResponse with the serialized tx
+    let mut mod_body = Vec::new();
+    mod_body.push(TX_TYPE_ID);                        // modifier type
+    mod_body.extend_from_slice(&1u32.to_be_bytes());  // count = 1
+    mod_body.extend_from_slice(tx_id);                // 32-byte ID
+    mod_body.extend_from_slice(&(tx_bytes.len() as u32).to_be_bytes()); // body length
+    mod_body.extend_from_slice(tx_bytes);             // serialized tx
+
+    let mod_msg = build_message(&magic, MSG_MODIFIER_RESPONSE, &mod_body);
+    stream.write_all(&mod_msg)?;
+    stream.flush()?;
+    eprintln!("  Sent tx ({} bytes)", tx_bytes.len());
+
+    let _ = stream.shutdown(std::net::Shutdown::Both);
+    Ok(())
+}
+
+/// Broadcast a transaction to multiple peers from a peer list file.
+/// Returns the number of peers the tx was successfully sent to.
+pub fn broadcast_tx_to_peers(
+    peers_file: &str,
+    network: Network,
+    tx_id: &[u8; 32],
+    tx_bytes: &[u8],
+    max_peers: usize,
+) -> usize {
+    // Read peer list
+    let peers: Vec<SocketAddr> = match std::fs::read_to_string(peers_file) {
+        Ok(contents) => {
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&contents) {
+                json["peers"]
+                    .as_array()
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_str()?.parse().ok())
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            }
+        }
+        Err(_) => Vec::new(),
+    };
+
+    if peers.is_empty() {
+        eprintln!("  No peers in {}, using seed peers", peers_file);
+        // Fall back to seed peers based on network
+        let seeds: Vec<SocketAddr> = match network {
+            Network::Testnet => vec![
+                "128.253.41.110:9020".parse().unwrap(),
+                "176.9.15.237:9021".parse().unwrap(),
+            ],
+            Network::Mainnet => vec![
+                "213.239.193.208:9030".parse().unwrap(),
+                "176.9.15.237:9030".parse().unwrap(),
+            ],
+        };
+        return broadcast_to_list(&seeds, network, tx_id, tx_bytes, max_peers);
+    }
+
+    broadcast_to_list(&peers, network, tx_id, tx_bytes, max_peers)
+}
+
+fn broadcast_to_list(
+    peers: &[SocketAddr],
+    network: Network,
+    tx_id: &[u8; 32],
+    tx_bytes: &[u8],
+    max_peers: usize,
+) -> usize {
+    let mut sent = 0;
+    for addr in peers.iter().take(max_peers) {
+        eprint!("  Broadcasting to {}... ", addr);
+        match broadcast_tx(*addr, network, tx_id, tx_bytes) {
+            Ok(()) => {
+                eprintln!("OK");
+                sent += 1;
+            }
+            Err(e) => eprintln!("failed: {}", e),
+        }
+    }
+    sent
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{:02x}", b)).collect()
+}
+
+// ---------------------------------------------------------------------------
 // Simple RNG (avoid adding rand crate)
 // ---------------------------------------------------------------------------
 

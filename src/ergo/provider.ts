@@ -265,10 +265,13 @@ class ErgoProviderImpl implements ErgoProvider {
       endpoints.push(`${this.submitUrl}/transactions`);
     }
 
-    // 2. Explorer mempool relay
+    // 2. ergo-signer P2P broadcast (if signer has /transactions endpoint)
+    endpoints.push(`${this.signerUrl}/transactions`);
+
+    // 3. Explorer mempool relay
     endpoints.push(`${this.explorerUrl}/api/v1/mempool/transactions/submit`);
 
-    // 3. Local Ergo node (if running)
+    // 4. Local Ergo node (if running)
     endpoints.push("http://127.0.0.1:9053/transactions");
     endpoints.push("http://127.0.0.1:9052/transactions");
 

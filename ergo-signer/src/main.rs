@@ -230,6 +230,35 @@ fn main() {
                 }
             }
 
+            (Method::Post, "/transactions") => {
+                let mut body = Vec::new();
+                if let Err(e) = request.as_reader().read_to_end(&mut body) {
+                    let err = ErrorResponse {
+                        error: 400,
+                        reason: "bad.request",
+                        detail: format!("Failed to read request body: {}", e),
+                    };
+                    let _ = request.respond(json_response(400, &err));
+                    continue;
+                }
+
+                match do_broadcast(&body) {
+                    Ok(tx_id) => {
+                        // Return tx ID as a JSON string (same as Ergo node)
+                        let _ = request.respond(json_response(200, &tx_id));
+                    }
+                    Err(detail) => {
+                        eprintln!("Broadcast error: {}", detail);
+                        let err = ErrorResponse {
+                            error: 400,
+                            reason: "bad.request",
+                            detail,
+                        };
+                        let _ = request.respond(json_response(400, &err));
+                    }
+                }
+            }
+
             _ => {
                 let err = ErrorResponse {
                     error: 404,
@@ -240,6 +269,51 @@ fn main() {
             }
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Transaction broadcast via P2P
+// ---------------------------------------------------------------------------
+
+fn do_broadcast(body: &[u8]) -> Result<String, String> {
+    use ergo_lib::chain::transaction::Transaction;
+    use ergotree_ir::serialization::SigmaSerializable;
+
+    // Parse signed transaction from JSON
+    let tx: Transaction = serde_json::from_slice(body)
+        .map_err(|e| format!("Invalid signed transaction JSON: {}", e))?;
+
+    // Serialize to bytes for P2P wire format
+    let tx_bytes = tx.sigma_serialize_bytes()
+        .map_err(|e| format!("Failed to serialize tx: {}", e))?;
+
+    // Get tx ID (32 bytes)
+    let tx_id = tx.id();
+    let tx_id_ref: &[u8] = tx_id.as_ref();
+    let mut tx_id_bytes = [0u8; 32];
+    tx_id_bytes.copy_from_slice(tx_id_ref);
+
+    let tx_id_hex = tx_id_bytes.iter().map(|b| format!("{:02x}", b)).collect::<String>();
+    eprintln!("Broadcasting tx {} ({} bytes)", tx_id_hex, tx_bytes.len());
+
+    // Determine network from env or default to testnet if .testing-mode exists
+    let network = if std::path::Path::new("/etc/blockhost/.testing-mode").exists() {
+        p2p::Network::Testnet
+    } else {
+        p2p::Network::Mainnet
+    };
+
+    let peers_file = std::env::var("ERGO_PEERS_FILE")
+        .unwrap_or_else(|_| "/var/lib/blockhost/ergo-peers.json".to_string());
+
+    let sent = p2p::broadcast_tx_to_peers(&peers_file, network, &tx_id_bytes, &tx_bytes, 3);
+
+    if sent == 0 {
+        return Err("Failed to broadcast to any peer".to_string());
+    }
+
+    eprintln!("Broadcast to {} peer(s)", sent);
+    Ok(tx_id_hex)
 }
 
 // ---------------------------------------------------------------------------
