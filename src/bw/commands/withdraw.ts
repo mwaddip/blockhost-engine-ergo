@@ -174,20 +174,29 @@ export async function executeWithdraw(
     `${claimable.length} claimable box(es) (processing up to ${MAX_BATCH})`,
   );
 
-  const batch = claimable.slice(0, MAX_BATCH);
+  // Process one subscription at a time — the guard script checks OUTPUTS(0)
+  // for the continuing box, so we can only have one per tx
+  const batch = claimable.slice(0, 1);
 
   // Get current height and server's boxes for fees/change
   const height = await provider.getHeight();
   const serverBoxes = await provider.getUnspentBoxes(serverAddress);
 
   // Build the transaction
-  // Inputs: subscription boxes (to spend) + server boxes (for fees)
+  // IMPORTANT: subscription box must be FIRST input (its guard script runs)
+  // Server boxes follow (for fee payment)
   const allInputBoxes: ErgoBox[] = [...batch.map((b) => b.box), ...serverBoxes];
 
   const txBuilder = new TransactionBuilder(height).from(
     allInputBoxes as unknown as Box<Amount>[],
   );
 
+  // Build outputs in correct order:
+  // OUTPUTS(0) = continuing subscription box (guard script checks this)
+  // OUTPUTS(1) = collected funds to recipient
+  // OUTPUTS(2) = miner fee
+  // OUTPUTS(3+) = change
+  const continuingOutputs: OutputBuilder[] = [];
   let totalCollected = 0n;
 
   for (const info of batch) {
@@ -258,19 +267,21 @@ export async function executeWithdraw(
         }
       }
 
-      txBuilder.to(continuingOutput);
+      continuingOutputs.push(continuingOutput); // MUST be OUTPUTS(0)
     }
   }
 
-  // Send collected funds to recipient
+  // Add continuing boxes FIRST (guard script checks OUTPUTS(0))
+  for (const out of continuingOutputs) {
+    txBuilder.to(out);
+  }
+
+  // Then collection output
   if (totalCollected > 0n) {
-    // Check if collecting ERG or tokens
     const firstInfo = batch[0];
     if (firstInfo && firstInfo.state.paymentTokenId === "") {
-      // ERG collection
       txBuilder.to(new OutputBuilder(totalCollected, toAddress));
     } else if (firstInfo && firstInfo.state.paymentTokenId !== "") {
-      // Token collection
       txBuilder.to(
         new OutputBuilder(SAFE_MIN_BOX_VALUE, toAddress).addTokens({
           tokenId: firstInfo.state.paymentTokenId,
@@ -284,16 +295,6 @@ export async function executeWithdraw(
     .sendChangeTo(serverAddress)
     .payMinFee()
     .build();
-
-  // Debug: log output order
-  const eip12 = (unsignedTx as any).toEIP12Object?.() ?? unsignedTx;
-  const outs = (eip12 as any).outputs ?? (eip12 as any)._outputs ?? [];
-  for (let i = 0; i < outs.length; i++) {
-    const o = outs[i];
-    const tree = o.ergoTree?.slice(0, 20) ?? "?";
-    const regs = Object.keys(o.additionalRegisters || {});
-    console.error(`  OUTPUTS[${i}]: tree=${tree}... value=${o.value} regs=[${regs}]`);
-  }
 
   // Sign via node (server key handles the subscription guard script spending proof)
   const signedTx = await provider.signTx(unsignedTx, [privKeyHex]);
