@@ -8,7 +8,7 @@
  *   generate-keypair    <outfile>                    Generate secp256k1 key + Ergo address
  *   generate-mnemonic                                Generate 15-word BIP39 mnemonic
  *   validate-mnemonic   <word1> <word2> ...          Validate BIP39 mnemonic
- *   mnemonic-to-address <word1> <word2> ...          Derive Ergo address from mnemonic
+ *   mnemonic-to-address [--testnet] <word1> <word2> ... Derive Ergo address from mnemonic
  *   encrypt-symmetric   <key-hex> <data>    SHAKE256-keyed AES-256-GCM encryption
  *   decrypt-symmetric   <key-hex> <ciphertext-hex>   Reverse of above
  *   encrypt-asymmetric  <pubkey-hex> <data> ECIES secp256k1 encryption
@@ -44,7 +44,7 @@ function requireHex(value: string, label: string): void {
  * Derive an Ergo private key and address from a BIP39 mnemonic.
  * Uses BIP32 secp256k1 derivation with path m/44'/429'/0'/0/0 (EIP-3).
  */
-function deriveErgoKey(mnemonic: string): { privateKey: string; address: string } {
+function deriveErgoKey(mnemonic: string, mainnet = true): { privateKey: string; address: string } {
   const seed = mnemonicToSeedSync(mnemonic);
   const hd = HDKey.fromMasterSeed(seed);
   const child = hd.derive(ERGO_PATH);
@@ -52,7 +52,7 @@ function deriveErgoKey(mnemonic: string): { privateKey: string; address: string 
     throw new Error("Failed to derive private key from mnemonic");
   }
   const privKeyHex = Buffer.from(child.privateKey).toString("hex");
-  const address = addressFromPrivateKey(privKeyHex);
+  const address = addressFromPrivateKey(privKeyHex, mainnet);
   return { privateKey: privKeyHex, address };
 }
 
@@ -93,13 +93,14 @@ function main(): void {
     }
 
     case "mnemonic-to-address": {
-      const words = args.slice(1);
-      if (words.length === 0) die("Usage: bhcrypt mnemonic-to-address <word1> <word2> ...");
+      const testnetFlag = args.includes("--testnet");
+      const words = args.slice(1).filter(w => w !== "--testnet");
+      if (words.length === 0) die("Usage: bhcrypt mnemonic-to-address [--testnet] <word1> <word2> ...");
       const mnemonic = words.join(" ");
       if (!validateMnemonic(mnemonic, english)) {
         die("invalid mnemonic phrase");
       }
-      const { address } = deriveErgoKey(mnemonic);
+      const { address } = deriveErgoKey(mnemonic, !testnetFlag);
       process.stdout.write(address + "\n");
       break;
     }
@@ -154,7 +155,7 @@ function main(): void {
         "  generate-keypair    <outfile>                    Generate secp256k1 key + Ergo address\n" +
         "  generate-mnemonic                                Generate 15-word BIP39 mnemonic\n" +
         "  validate-mnemonic   <word1> <word2> ...          Validate BIP39 mnemonic\n" +
-        "  mnemonic-to-address <word1> <word2> ...          Derive Ergo address from mnemonic\n" +
+        "  mnemonic-to-address [--testnet] <word1> <word2> ... Derive Ergo address from mnemonic\n" +
         "  encrypt-symmetric   <key-hex> <data>    Symmetric encryption\n" +
         "  decrypt-symmetric   <key-hex> <ciphertext-hex>   Symmetric decryption\n" +
         "  encrypt-asymmetric  <pubkey-hex> <data> ECIES encryption\n" +
