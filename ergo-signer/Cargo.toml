@@ -18,3 +18,14 @@ opt-level = "s"
 lto = true
 strip = true
 codegen-units = 1
+
+[dependencies.blake2]
+version = "0.10"
+
+[[bin]]
+name = "ergo-signer"
+path = "src/main.rs"
+
+[[bin]]
+name = "ergo-peers"
+path = "src/peers.rs"

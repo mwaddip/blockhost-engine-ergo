@@ -505,6 +505,7 @@ dependencies = [
 name = "ergo-signer"
 version = "0.1.0"
 dependencies = [
+ "blake2",
  "ergo-chain-types",
  "ergo-lib",
  "ergotree-interpreter",

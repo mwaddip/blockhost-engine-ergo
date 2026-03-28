@@ -6,6 +6,8 @@
 //!
 //! Uses sigma-rust (ergo-lib) for transaction signing. No JRE needed.
 
+mod p2p;
+
 use ergo_lib::chain::transaction::unsigned::UnsignedTransaction;
 use ergo_lib::wallet::Wallet;
 use ergo_lib::wallet::secret_key::SecretKey;
