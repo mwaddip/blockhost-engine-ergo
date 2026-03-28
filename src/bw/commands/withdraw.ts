@@ -30,7 +30,7 @@ import {
   encodeSubscriptionRegisters,
 } from "../../ergo/registers.js";
 import {
-  getOrCompileSubscriptionErgoTree,
+  getSubscriptionErgoTree,
   contractAddress,
 } from "../../ergo/contracts.js";
 import { publicKeyFromAddress } from "../../ergo/address.js";
@@ -134,10 +134,7 @@ export async function executeWithdraw(
   const serverPubKey = publicKeyFromAddress(serverAddress);
 
   // Get subscription contract ErgoTree
-  const subscriptionErgoTree = await getOrCompileSubscriptionErgoTree(
-    config.nodeUrl,
-    serverPubKey,
-  );
+  const subscriptionErgoTree = getSubscriptionErgoTree(serverPubKey);
   const subscriptionAddress = contractAddress(
     subscriptionErgoTree,
     config.network === "mainnet",

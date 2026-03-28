@@ -16,7 +16,7 @@ import * as fs from "fs";
 import { createProvider } from "../ergo/provider.js";
 import type { ErgoProvider } from "../ergo/provider.js";
 import { loadNetworkConfig } from "../fund-manager/web3-config.js";
-import { getOrCompileSubscriptionErgoTree } from "../ergo/contracts.js";
+import { getSubscriptionErgoTree } from "../ergo/contracts.js";
 import { publicKeyFromAddress, addressFromPrivateKey } from "../ergo/address.js";
 import { loadServerPrivateKey } from "../crypto.js";
 import { SubscriptionScanner, type ScanDiff, type TrackedSubscription } from "./scanner.js";
@@ -29,7 +29,7 @@ import { runReconciliation } from "../reconcile/index.js";
 import { processAdminCommands, loadAdminConfig, initAdminCommands, shutdownAdminCommands } from "../admin/index.js";
 import type { AdminConfig } from "../admin/index.js";
 import { runFundManager, runGasCheck, shouldRunFundCycle, shouldRunGasCheck } from "../fund-manager/index.js";
-import { STATE_DIR, TESTING_MODE_FILE, CONFIG_DIR } from "../paths.js";
+import { STATE_DIR, TESTING_MODE_FILE } from "../paths.js";
 
 // -- Testing mode ------------------------------------------------------------
 
@@ -282,31 +282,10 @@ async function main(): Promise<void> {
 
   // Get subscription ErgoTree (compile or use cached)
   let subscriptionErgoTree: string;
-  try {
-    // Check if pre-compiled ErgoTree exists in contracts.yaml
-    const contractsPath = `${CONFIG_DIR}/contracts.yaml`;
-    if (fs.existsSync(contractsPath)) {
-      const yaml = await import("js-yaml");
-      const raw = yaml.load(fs.readFileSync(contractsPath, "utf8")) as Record<string, Record<string, Record<string, string>>>;
-      const subTree = raw?.["contracts"]?.["subscription"]?.["ergoTree"];
-      if (subTree) {
-        subscriptionErgoTree = subTree;
-        console.log(`Subscription tree: ${subscriptionErgoTree.slice(0, 40)}... (from contracts.yaml)`);
-      } else {
-        throw new Error("No subscription ErgoTree in contracts.yaml");
-      }
-    } else {
-      // Compile via node
-      subscriptionErgoTree = await getOrCompileSubscriptionErgoTree(
-        config.nodeUrl,
-        serverPubKeyHex,
-      );
-      console.log(`Subscription tree: ${subscriptionErgoTree.slice(0, 40)}... (compiled via node)`);
-    }
-  } catch (err) {
-    console.error(`[MONITOR] Fatal: could not get subscription ErgoTree: ${err}`);
-    process.exit(1);
-  }
+  // Derive subscription ErgoTree from embedded template + server PK
+  // No node or JRE needed — pure constant substitution
+  subscriptionErgoTree = getSubscriptionErgoTree(serverPubKeyHex);
+  console.log(`Subscription tree: ${subscriptionErgoTree.slice(0, 40)}... (from template)`);
 
   // Create scanner
   const scanner = new SubscriptionScanner(provider, subscriptionErgoTree, testingMode);
