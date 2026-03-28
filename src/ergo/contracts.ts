@@ -89,7 +89,9 @@ export const SUBSCRIPTION_SCRIPT_TEMPLATE = `{
   }
 
   // ---- Path 1: ServiceCollect ----
-  val elapsedMs = currentTime - lastCollected
+  // Cap elapsed time at expiry — cannot collect beyond subscription end
+  val effectiveTime = if (currentTime > expiry) expiry else currentTime
+  val elapsedMs = effectiveTime - lastCollected
   val intervals = elapsedMs / intervalMs
   val earned = {
     val raw = intervals * ratePerInterval
@@ -100,8 +102,10 @@ export const SUBSCRIPTION_SCRIPT_TEMPLATE = `{
   val collectPath = {
     val validEarn = earned > 0L
     val validContinuation = if (fullyConsumed) {
-      // Beacon must be burned (not in successor) — no continuing output required
-      true
+      // Beacon must be burned — verify absent from ALL outputs
+      OUTPUTS.forall { (box: Box) =>
+        box.tokens.forall { (t: (Coll[Byte], Long)) => t._1 != beaconTokenId }
+      }
     } else {
       sameScript && beaconPreserved && immutablePreserved &&
       successorR5._1 == amountRemaining - earned &&
