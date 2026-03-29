@@ -646,8 +646,10 @@ async function topUpWallet(mode) {
         var changeAddr = await api.get_change_address();
         var currentHeight = await api.get_current_height();
 
-        // Get UTXOs — EIP-12 returns full box objects
-        var utxos = await api.get_utxos(nanoErg.toString());
+        // Get UTXOs — request enough to cover amount + fee
+        var fee = 1100000; // 0.0011 ERG (standard Ergo min fee)
+        var target = nanoErg + fee;
+        var utxos = await api.get_utxos(target.toString());
         if (!utxos || utxos.length === 0) {
             utxos = await api.get_utxos();
         }
@@ -655,10 +657,6 @@ async function topUpWallet(mode) {
 
         // Derive deployer ErgoTree from address (Base58 decode)
         var deployerErgoTree = addressToErgoTree(deployerAddr);
-
-        // Build unsigned transaction
-        var fee = 1100000; // 0.0011 ERG (standard Ergo min fee)
-        var target = nanoErg + fee;
 
         // Select inputs (simple greedy)
         var selected = [];
