@@ -3,7 +3,8 @@
 set -e
 
 VERSION="0.1.0"
-PKG_NAME="blockhost-engine-ergo_${VERSION}_all"
+ARCH=$(dpkg --print-architecture 2>/dev/null || uname -m | sed 's/x86_64/amd64/')
+PKG_NAME="blockhost-engine-ergo_${VERSION}_${ARCH}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 PKG_DIR="$SCRIPT_DIR/$PKG_NAME"
@@ -171,9 +172,9 @@ Package: blockhost-engine-ergo
 Version: ${VERSION}
 Section: admin
 Priority: optional
-Architecture: all
-Depends: blockhost-common (>= 0.1.0), ergo-relay (>= 0.1.0), nodejs (>= 22), python3 (>= 3.10)
-Provides: bhcrypt, blockhost-engine
+Architecture: ${ARCH}
+Depends: blockhost-common (>= 0.1.0), nodejs (>= 22), python3 (>= 3.10), libgcc-s1
+Provides: bhcrypt, blockhost-engine, ergo-relay
 Conflicts: blockhost-engine
 Recommends: blockhost-provisioner-proxmox (>= 0.1.0) | blockhost-provisioner-libvirt (>= 0.1.0)
 Maintainer: Blockhost <admin@blockhost.io>
@@ -285,23 +286,75 @@ fi
 cp "$PROJECT_DIR/scripts/signup-template.html" "$PKG_DIR/usr/share/blockhost/"
 cp "$PROJECT_DIR/scripts/signup-engine.js" "$PKG_DIR/usr/share/blockhost/"
 
-# Build ergo-relay .deb from submodule (separate package, engine depends on it)
+# Build ergo-relay Rust binaries from submodule (shipped inside this .deb)
 RELAY_DIR="$PROJECT_DIR/ergo-relay"
-if [ -f "$RELAY_DIR/packaging/build.sh" ]; then
+if [ -f "$RELAY_DIR/Cargo.toml" ]; then
     echo ""
-    echo "Building ergo-relay..."
-    chmod +x "$RELAY_DIR/packaging/build.sh"
-    "$RELAY_DIR/packaging/build.sh"
-    RELAY_DEB=$(find "$RELAY_DIR/packaging" -name "ergo-relay_*.deb" -type f | head -1)
-    if [ -n "$RELAY_DEB" ]; then
-        echo "  ergo-relay: $(du -h "$RELAY_DEB" | cut -f1)"
-        # Copy to same output dir as engine .deb
-        cp "$RELAY_DEB" "$SCRIPT_DIR/"
-    else
-        echo "WARNING: ergo-relay build produced no .deb"
+    echo "Building ergo-relay binaries..."
+    (cd "$RELAY_DIR" && cargo build --release)
+
+    SIGNER="$RELAY_DIR/target/release/ergo-relay"
+    PEERS="$RELAY_DIR/target/release/ergo-peers"
+
+    if [ ! -f "$SIGNER" ] || [ ! -f "$PEERS" ]; then
+        echo "ERROR: ergo-relay build failed — binaries not found"
+        exit 1
     fi
+
+    cp "$SIGNER" "$PKG_DIR/usr/bin/ergo-relay"
+    cp "$PEERS" "$PKG_DIR/usr/bin/ergo-peers"
+    chmod 755 "$PKG_DIR/usr/bin/ergo-relay" "$PKG_DIR/usr/bin/ergo-peers"
+    echo "  ergo-relay: $(du -h "$SIGNER" | cut -f1)"
+    echo "  ergo-peers: $(du -h "$PEERS" | cut -f1)"
+
+    # Systemd units for ergo-relay
+    cat > "$PKG_DIR/lib/systemd/system/ergo-relay.service" << 'UNIT'
+[Unit]
+Description=Ergo Transaction Signer (BlockHost)
+After=network.target
+
+[Service]
+Type=simple
+User=blockhost
+Group=blockhost
+ExecStart=/usr/bin/ergo-relay
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/blockhost
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+    cat > "$PKG_DIR/lib/systemd/system/ergo-peers.service" << 'UNIT'
+[Unit]
+Description=Ergo P2P Peer Discovery
+After=network.target
+
+[Service]
+Type=oneshot
+User=blockhost
+Group=blockhost
+ExecStart=/usr/bin/ergo-peers
+ReadWritePaths=/var/lib/blockhost
+UNIT
+
+    cat > "$PKG_DIR/lib/systemd/system/ergo-peers.timer" << 'UNIT'
+[Unit]
+Description=Daily Ergo peer discovery
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=3600
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+UNIT
 else
-    echo "NOTE: ergo-relay submodule not checked out — skipping (install ergo-relay separately)"
+    echo "WARNING: ergo-relay submodule not checked out — relay binaries will not be included"
 fi
 
 # Systemd services
