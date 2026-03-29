@@ -101,6 +101,39 @@ def validate_signature(sig: str) -> bool:
     return bool(re.match(r"^[0-9a-fA-F]{64,}$", sig))
 
 
+def _wait_for_tx_confirmation(
+    tx_id: str,
+    blockchain: dict,
+    timeout: int = 300,
+    poll_interval: int = 10,
+) -> tuple[bool, Optional[str]]:
+    """Poll the explorer until a transaction is confirmed (has numConfirmations >= 1).
+
+    Returns (True, None) on confirmation, (False, reason) on timeout or error.
+    """
+    import time
+    import urllib.request
+    import urllib.error
+
+    explorer = _explorer_url(blockchain)
+    url = f"{explorer}/api/v1/transactions/{tx_id}"
+
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            req = urllib.request.Request(url, headers={"Accept": "application/json"})
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                data = json.loads(resp.read())
+                confirmations = data.get("numConfirmations", 0)
+                if isinstance(confirmations, int) and confirmations >= 1:
+                    return True, None
+        except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError):
+            pass  # Explorer hasn't indexed it yet or is temporarily unavailable
+        time.sleep(poll_interval)
+
+    return False, f"Transaction {tx_id} not confirmed within {timeout}s"
+
+
 def decrypt_config(sig: str, ciphertext: str) -> dict:
     """Decrypt config backup using SHAKE256-derived key from signature.
 
@@ -1073,15 +1106,24 @@ def finalize_mint_nft(config: dict) -> tuple[bool, Optional[str]]:
 
         # stdout is the token ID (64-char hex = box ID of first input)
         token_id = result.stdout.strip()
+
+        # The mint script also prints the txId to stderr — extract it
+        tx_id = ""
+        for line in (result.stderr or "").split("\n"):
+            if line.startswith("Transaction submitted: "):
+                tx_id = line.split(": ", 1)[1].strip()
+                break
+
+        # Wait for on-chain confirmation before proceeding
+        if tx_id:
+            confirmed, err = _wait_for_tx_confirmation(tx_id, blockchain)
+            if not confirmed:
+                return False, f"NFT minting tx not confirmed: {err}"
+
         config["_step_result_mint_nft"] = {
             "token_id": token_id,
             "owner": admin_wallet,
         }
-
-        # Wait for Explorer to index the mint before the next step
-        import time
-        time.sleep(10)
-
         return True, None
     except subprocess.TimeoutExpired:
         return False, "NFT minting timed out (waited for Ergo confirmation)"
@@ -1141,6 +1183,13 @@ def finalize_plan(config: dict) -> tuple[bool, Optional[str]]:
 
         if result.returncode != 0:
             return False, f"Plan creation failed: {result.stderr or result.stdout}"
+
+        # stdout is the txId — wait for on-chain confirmation
+        tx_id = result.stdout.strip()
+        if tx_id:
+            confirmed, err = _wait_for_tx_confirmation(tx_id, blockchain)
+            if not confirmed:
+                return False, f"Plan creation tx not confirmed: {err}"
 
         mode_label = (
             f"TESTING MODE: {interval_blocks} blocks/interval"

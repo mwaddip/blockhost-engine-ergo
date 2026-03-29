@@ -59,32 +59,27 @@ async function main(): Promise<void> {
   const serverAddress = addressFromPrivateKey(privKeyHex, mainnet);
   const serverPubKeyHex = publicKeyFromAddress(serverAddress);
 
-  console.log(`Network:        ${config.network}`);
-  console.log(`Server address: ${serverAddress}`);
-  console.log(`Server pubkey:  ${serverPubKeyHex}`);
-  console.log();
+  console.error(`Network:        ${config.network}`);
+  console.error(`Server address: ${serverAddress}`);
+  console.error(`Server pubkey:  ${serverPubKeyHex}`);
 
   // -- Derive subscription ErgoTree from template --------------------------
 
-  console.log("Deriving subscription guard ErgoTree from template...");
-  console.log(`Template size: ${SUBSCRIPTION_ERGO_TREE_TEMPLATE.length / 2} bytes`);
+  console.error("Deriving subscription guard ErgoTree from template...");
+  console.error(`Template size: ${SUBSCRIPTION_ERGO_TREE_TEMPLATE.length / 2} bytes`);
 
   const subscriptionErgoTree = getSubscriptionErgoTree(serverPubKeyHex);
   const subscriptionAddress = contractAddress(subscriptionErgoTree, mainnet);
 
-  console.log(`Subscription P2S address:  ${subscriptionAddress}`);
-  console.log(`Subscription ErgoTree:     ${subscriptionErgoTree.slice(0, 40)}...`);
-  console.log(`Subscription ErgoTree len: ${subscriptionErgoTree.length / 2} bytes`);
-  console.log();
+  console.error(`Subscription P2S address:  ${subscriptionAddress}`);
+  console.error(`Subscription ErgoTree len: ${subscriptionErgoTree.length / 2} bytes`);
 
   // -- Reference guard (server P2PK) ---------------------------------------
 
   const referenceErgoTree = getReferenceErgoTree(serverAddress);
   const referenceAddress = contractAddress(referenceErgoTree, mainnet);
 
-  console.log(`Reference P2S address: ${referenceAddress}`);
-  console.log(`Reference ErgoTree:    ${referenceErgoTree}`);
-  console.log();
+  console.error(`Reference P2S address: ${referenceAddress}`);
 
   // -- Write config --------------------------------------------------------
 
@@ -110,15 +105,18 @@ async function main(): Promise<void> {
   const yamlStr = yaml.dump(configData, { lineWidth: -1 });
 
   if (dryRun) {
-    console.log(`[dry-run] Would write to: ${CONFIG_DIR}/contracts.yaml`);
-    console.log(yamlStr);
+    console.error(`[dry-run] Would write to: ${CONFIG_DIR}/contracts.yaml`);
+    console.error(yamlStr);
   } else {
     const outPath = `${CONFIG_DIR}/contracts.yaml`;
     fs.writeFileSync(outPath, yamlStr, "utf8");
-    console.log(`Contract config written to: ${outPath}`);
+    console.error(`Contract config written to: ${outPath}`);
   }
 
-  console.log("Done.");
+  // Machine-readable output for the wizard (key=value on stdout)
+  console.log(`subscription_ergo_tree=${subscriptionErgoTree}`);
+  console.log(`reference_ergo_tree=${referenceErgoTree}`);
+  console.error("Done.");
 }
 
 main().catch((err) => {
