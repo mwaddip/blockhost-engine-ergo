@@ -31,8 +31,9 @@ Key characteristics:
 - **ErgoScript guard script** with 4 spending paths (collect, cancel, extend, migrate)
 - **Interval-based collection** — service claims earned payment periodically, not all at once
 - **Fair cancellation** — guard script enforces earned/refund split
-- **Pure JS stack** — Fleet SDK + Ergo Node API, zero WASM dependencies
-- **Node-delegated signing** — server-side tx signing via Ergo node `/wallet/transaction/sign`
+- **No JRE, no Ergo node on host** — Fleet SDK for tx building, ergo-relay (Rust) for signing + P2P broadcast
+- **Pre-compiled ErgoTree** — compiled once at dev time, server PK substituted via byte surgery at deploy time
+- **Block height for all timing** — never timestamps, HEIGHT is deterministic and monotonically increasing
 
 ## Components
 
@@ -66,8 +67,8 @@ A single parameterized guard script compiled via the Ergo node, with 4 spending 
 
 Subscription state stored in box registers:
 - **R4**: `(Int, Coll[Byte])` — plan ID + subscriber ErgoTree
-- **R5**: `(Long, (Long, Long))` — amount remaining + (rate per interval, interval ms)
-- **R6**: `(Long, Long)` — last collected + expiry (POSIX ms)
+- **R5**: `(Long, (Long, Int))` — amount remaining + (rate per interval, interval blocks)
+- **R6**: `(Int, Int)` — last collected height + expiry height
 - **R7**: `Coll[Byte]` — payment token ID (empty for native ERG)
 - **R8**: `Coll[Byte]` — ECIES-encrypted user data
 - **R2** (tokens): beacon token (unique per subscription, ID = first input box ID)
@@ -80,7 +81,7 @@ Authentication is handled by **libpam-web3** and its chain-specific plugins (sep
 
 - Node.js 22+
 - Python 3.10+
-- Ergo node (for ErgoScript compilation and transaction signing)
+- `ergo-relay` package (Rust binary for signing + P2P broadcast — no JRE or Ergo node needed)
 - `blockhost-common` package
 - A provisioner package (e.g. `blockhost-provisioner-proxmox`)
 
@@ -143,6 +144,20 @@ blockhost-engine-ergo/
 ├── examples/                          # Systemd units
 └── facts/                             # Interface contracts (submodule)
 ```
+
+## Documentation
+
+| Document | Contents |
+|----------|----------|
+| [docs/guard-script.md](docs/guard-script.md) | ErgoScript guard: registers, spending paths, beacon tokens |
+| [docs/reconciler.md](docs/reconciler.md) | NFT ownership reconciliation, GECOS sync |
+| [docs/configuration.md](docs/configuration.md) | Config files, addressbook, revenue sharing |
+| [docs/fund-manager.md](docs/fund-manager.md) | Subscription collection, distribution, hot wallet |
+| [docs/cli.md](docs/cli.md) | bw, ab, is, bhcrypt — all CLI tools |
+| [docs/engine-manifest.md](docs/engine-manifest.md) | engine.json schema, constraints |
+| [docs/privilege-separation.md](docs/privilege-separation.md) | Root agent protocol |
+| [docs/templating.md](docs/templating.md) | Signup page templates, placeholders |
+| [docs/ergo-tx-pitfalls.md](docs/ergo-tx-pitfalls.md) | Ergo transaction building gotchas |
 
 ## Dependencies
 
