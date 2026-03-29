@@ -733,11 +733,9 @@ async function topUpWallet(mode) {
         startAutoRefresh(mode);
     } catch (e) {
         btn.disabled = false;
-        if (e.code === 1 || (e.message && e.message.indexOf('rejected') !== -1) || (e.message && e.message.indexOf('denied') !== -1)) {
-            statusEl.textContent = 'Cancelled by user.';
-        } else {
-            statusEl.textContent = 'Error: ' + (e.message || e.info || e);
-        }
+        var detail = e.message || e.info || (typeof e === 'string' ? e : JSON.stringify(e));
+        console.error('[topup] Transaction error:', e);
+        statusEl.textContent = 'Error: ' + detail;
     }
 }
 
