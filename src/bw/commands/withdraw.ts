@@ -205,10 +205,16 @@ export async function executeWithdraw(
     totalCollected += info.collectAmount;
 
     if (info.fullyConsumed) {
-      // Fully consumed: beacon token is burned (not included in any output)
-      // No continuing box needed -- the box is consumed entirely
-      // If the beacon token is not accounted for in outputs, Fleet SDK
-      // will require explicit burn
+      // Fully consumed: beacon token is burned.
+      // The guard script eagerly evaluates OUTPUTS(0).R4/R5/R6.get even on the
+      // fullyConsumed path. We must create OUTPUTS(0) with valid register types
+      // to avoid a None.get crash, but WITHOUT the beacon token (the fullyConsumed
+      // check verifies no output contains the beacon).
+      const dummyRegs = encodeSubscriptionRegisters(info.state);
+      continuingOutputs.push(
+        new OutputBuilder(SAFE_MIN_BOX_VALUE, serverAddress)
+          .setAdditionalRegisters(dummyRegs),
+      );
       if (info.state.beaconTokenId) {
         const beaconAmount = info.box.assets[0]?.amount ?? 1n;
         txBuilder.burnTokens({
@@ -298,8 +304,8 @@ export async function executeWithdraw(
     .payMinFee()
     .build();
 
-  // Sign via node (server key handles the subscription guard script spending proof)
-  const signedTx = await provider.signTx(unsignedTx, [privKeyHex]);
+  // Sign via ergo-relay — pass full input boxes for signing context
+  const signedTx = await provider.signTx(unsignedTx, [privKeyHex], allInputBoxes);
   const txId = await provider.submitTx(signedTx);
 
   console.log(txId);

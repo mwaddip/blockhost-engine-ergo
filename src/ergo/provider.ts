@@ -55,13 +55,13 @@ export interface ErgoProvider {
   submitTx(signedTx: unknown): Promise<string>;
 
   /**
-   * Sign an unsigned transaction using the node's wallet endpoint.
-   * @param unsignedTx  The unsigned transaction object
-   * @param secrets     Array of hex-encoded private keys (dlog secrets)
-   * @param inputsRaw   Optional array of serialized input box hex strings
+   * Sign an unsigned transaction using ergo-relay.
+   * @param unsignedTx   The unsigned transaction object
+   * @param secrets      Array of hex-encoded private keys (dlog secrets)
+   * @param inputBoxes   Full input box objects (needed when tx inputs lack value/ergoTree)
    * @returns The signed transaction object
    */
-  signTx(unsignedTx: unknown, secrets: string[], inputsRaw?: string[]): Promise<unknown>;
+  signTx(unsignedTx: unknown, secrets: string[], inputBoxes?: ErgoBox[]): Promise<unknown>;
 
   /** Get token metadata from the explorer. */
   getToken(tokenId: string): Promise<TokenInfo>;
@@ -305,13 +305,36 @@ class ErgoProviderImpl implements ErgoProvider {
   async signTx(
     unsignedTx: unknown,
     secrets: string[],
-    inputsRaw?: string[],
+    inputBoxes?: ErgoBox[],
   ): Promise<unknown> {
     this.assertSecureForSecrets();
-    // Convert Fleet SDK tx to EIP-12 format if needed
-    const tx = typeof (unsignedTx as any)?.toEIP12Object === "function"
-      ? (unsignedTx as any).toEIP12Object()
+    // Convert Fleet SDK tx to plain object if needed
+    const tx: any = typeof (unsignedTx as any)?.toPlainObject === "function"
+      ? (unsignedTx as any).toPlainObject()
       : unsignedTx;
+
+    // ergo-relay parses tx.inputs as full ErgoBox objects for the signing context.
+    // Fleet SDK's toPlainObject() only includes { boxId, extension } in inputs.
+    // If inputBoxes are provided, merge full box data into tx.inputs.
+    if (inputBoxes && Array.isArray(tx.inputs)) {
+      const boxMap = new Map(inputBoxes.map((b) => [b.boxId, b]));
+      tx.inputs = tx.inputs.map((input: any) => {
+        const full = boxMap.get(input.boxId);
+        if (!full) return input;
+        return {
+          boxId: full.boxId,
+          transactionId: full.transactionId,
+          index: full.index,
+          value: full.value,
+          ergoTree: full.ergoTree,
+          creationHeight: full.creationHeight,
+          assets: full.assets,
+          additionalRegisters: full.additionalRegisters,
+          extension: input.extension ?? {},
+        };
+      });
+    }
+
     // Fetch current height for scripts that use HEIGHT (like subscription guard)
     let height: number | undefined;
     try {
@@ -323,9 +346,6 @@ class ErgoProviderImpl implements ErgoProvider {
       secrets: { dlog: secrets },
       height,
     };
-    if (inputsRaw && inputsRaw.length > 0) {
-      body["inputsRaw"] = inputsRaw;
-    }
     // Sign via ergo-relay (separate from node — no JRE needed)
     const url = `${this.signerUrl}/wallet/transaction/sign`;
     const res = await fetch(url, {

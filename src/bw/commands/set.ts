@@ -1,8 +1,8 @@
 /**
  * bw set encrypt <nft_id> <data>
  *
- * Update NFT reference data by spending the reference box holding the
- * NFT reference data and creating a new box with updated R8 (userEncrypted).
+ * Update NFT reference data by spending the reference box and creating
+ * a new box with updated R5 (userEncrypted).
  *
  * The reference box is a server-guarded P2PK box. The server's private key
  * is used to sign the spending transaction.
@@ -16,6 +16,8 @@ import {
   SAFE_MIN_BOX_VALUE,
 } from "@fleet-sdk/core";
 import type { Box, Amount } from "@fleet-sdk/common";
+import { decode } from "@fleet-sdk/serializer";
+import { hex } from "@fleet-sdk/crypto";
 import type { Addressbook } from "../../fund-manager/types.js";
 import type { ErgoBox } from "../../ergo/types.js";
 import { getProviderClient } from "../cli-utils.js";
@@ -79,34 +81,40 @@ async function setEncryptCommand(
 
   console.error(`Looking for reference box with NFT ${nftId.slice(0, 16)}...`);
 
-  // Find the box holding the NFT reference token at the server address
+  // Find the reference box by matching R4 (Coll[Byte] containing NFT token ID)
   const serverBoxes = await provider.getUnspentBoxes(serverAddress);
 
   let refBox: ErgoBox | undefined;
   for (const box of serverBoxes) {
-    const hasNft = box.assets.some((a) => a.tokenId === nftId);
-    if (hasNft) {
-      refBox = box;
-      break;
+    const r4Hex = box.additionalRegisters["R4"];
+    if (!r4Hex) continue;
+    try {
+      const r4Bytes = decode<Uint8Array>(r4Hex);
+      if (r4Bytes && hex.encode(r4Bytes) === nftId.toLowerCase()) {
+        refBox = box;
+        break;
+      }
+    } catch {
+      // Not a Coll[Byte] — skip
     }
   }
 
   if (!refBox) {
     throw new Error(
-      `Reference box with NFT ${nftId} not found at server address. Has this NFT been minted?`,
+      `Reference box for NFT ${nftId} not found at server address. Has this NFT been minted?`,
     );
   }
 
   console.error(`Found at ${refBox.boxId.slice(0, 16)}...`);
 
-  // Build the updated output: same box contents but with updated R8
+  // Build the updated output: same box contents but with updated R5
   const height = await provider.getHeight();
 
-  // Preserve existing registers, update R8 with new encrypted data
+  // Preserve existing registers, update R5 (userEncrypted in reference box)
   const updatedRegisters: Record<string, string> = {
     ...refBox.additionalRegisters,
   };
-  updatedRegisters["R8"] = encodeBytes(data);
+  updatedRegisters["R5"] = encodeBytes(data);
 
   // Create output with same value, tokens, and updated registers
   const outputValue =
@@ -120,16 +128,19 @@ async function setEncryptCommand(
     output.addTokens({ tokenId: asset.tokenId, amount: asset.amount });
   }
 
-  // Build unsigned tx: spend the ref box, create updated output
+  // Include server boxes for fee coverage (ref box alone may not cover fee)
+  const allInputs = [refBox, ...serverBoxes.filter((b) => b.boxId !== refBox!.boxId)];
+
+  // Build unsigned tx: spend the ref box + fee inputs, create updated output
   const unsignedTx = new TransactionBuilder(height)
-    .from([refBox] as unknown as Box<Amount>[])
+    .from(allInputs as unknown as Box<Amount>[])
     .to(output)
     .sendChangeTo(serverAddress)
     .payMinFee()
     .build();
 
-  // Sign via node and submit
-  const signedTx = await provider.signTx(unsignedTx, [privKeyHex]);
+  // Sign via ergo-relay — pass full input boxes for signing context
+  const signedTx = await provider.signTx(unsignedTx, [privKeyHex], allInputs);
   const txId = await provider.submitTx(signedTx);
 
   console.log(txId);

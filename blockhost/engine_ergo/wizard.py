@@ -603,10 +603,11 @@ def _bw_env(blockchain: dict) -> dict:
 
 
 def finalize_wallet(config: dict) -> tuple[bool, Optional[str]]:
-    """Generate server wallet via bhcrypt generate-mnemonic and save mnemonic to deployer.key.
+    """Generate server wallet and save raw private key to deployer.key.
 
-    For wallet_mode == 'generate': runs bhcrypt generate-mnemonic and writes key file.
-    For wallet_mode == 'import': validates and writes the provided mnemonic.
+    For wallet_mode == 'generate': runs bhcrypt generate-mnemonic and writes derived key.
+    For wallet_mode == 'import': derives key from the provided mnemonic.
+    Mnemonic is kept in config for display/backup, but deployer.key contains the raw 64-hex key.
     Idempotent: skips write if file exists with matching content.
     """
     try:
@@ -614,14 +615,16 @@ def finalize_wallet(config: dict) -> tuple[bool, Optional[str]]:
         blockchain = config.get("blockchain", {})
         wallet_mode = blockchain.get("wallet_mode", "generate")
         mnemonic = blockchain.get("deployer_mnemonic", "")
-        network = blockchain.get("network", "testnet")
 
-        mnemonic_file = CONFIG_DIR / "deployer.key"
+        key_file = CONFIG_DIR / "deployer.key"
+        private_key = ""
+        address = ""
 
         if wallet_mode == "generate" and not mnemonic:
             # Generate wallet via bhcrypt generate-mnemonic
+            # Returns JSON: { mnemonic, privateKey, address }
             result = subprocess.run(
-                ["bhcrypt", "generate-mnemonic", network],
+                ["bhcrypt", "generate-mnemonic"],
                 capture_output=True,
                 text=True,
                 timeout=30,
@@ -631,32 +634,49 @@ def finalize_wallet(config: dict) -> tuple[bool, Optional[str]]:
             try:
                 keygen_data = json.loads(result.stdout.strip())
                 mnemonic = keygen_data["mnemonic"]
+                private_key = keygen_data["privateKey"]
+                address = keygen_data["address"]
                 blockchain["deployer_mnemonic"] = mnemonic
-                blockchain["deployer_address"] = keygen_data.get("address", "")
+                blockchain["deployer_address"] = address
                 config["blockchain"] = blockchain
             except (json.JSONDecodeError, KeyError) as e:
                 return False, f"Could not parse keygen output: {e}"
-
-        if not mnemonic:
+        elif mnemonic:
+            # Import mode or re-run: derive key from existing mnemonic
+            words = mnemonic.split()
+            if len(words) not in (12, 15, 18, 21, 24):
+                return False, f"Invalid mnemonic word count ({len(words)})"
+            result = subprocess.run(
+                ["bhcrypt", "derive-key"] + words,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            if result.returncode != 0:
+                return False, f"Key derivation failed: {result.stderr.strip()}"
+            try:
+                key_data = json.loads(result.stdout.strip())
+                private_key = key_data["privateKey"]
+                address = key_data["address"]
+                blockchain["deployer_address"] = address
+                config["blockchain"] = blockchain
+            except (json.JSONDecodeError, KeyError) as e:
+                return False, f"Could not parse derive-key output: {e}"
+        else:
             return False, "No deployer mnemonic in configuration"
 
-        words = mnemonic.split()
-        if len(words) not in (12, 15, 18, 21, 24):
-            return False, f"Invalid mnemonic word count ({len(words)})"
+        if not private_key or len(private_key) != 64:
+            return False, "Failed to derive valid private key"
 
-        # Idempotent: skip if same mnemonic already written
-        if mnemonic_file.exists() and mnemonic_file.read_text().strip() == mnemonic:
-            config["_step_result_wallet"] = {
-                "address": blockchain.get("deployer_address", ""),
-            }
+        # Idempotent: skip if same key already written
+        if key_file.exists() and key_file.read_text().strip() == private_key:
+            config["_step_result_wallet"] = {"address": address}
             return True, None
 
-        mnemonic_file.write_text(mnemonic)
-        _set_blockhost_ownership(mnemonic_file, 0o640)
+        key_file.write_text(private_key)
+        _set_blockhost_ownership(key_file, 0o640)
 
-        config["_step_result_wallet"] = {
-            "address": blockchain.get("deployer_address", ""),
-        }
+        config["_step_result_wallet"] = {"address": address}
         return True, None
     except FileNotFoundError:
         return False, "bhcrypt not found — is blockhost-engine-ergo installed?"
@@ -717,15 +737,24 @@ def finalize_contracts(config: dict) -> tuple[bool, Optional[str]]:
             }
             return True, None
 
-        # Need deployer key to be present
-        mnemonic_file = CONFIG_DIR / "deployer.key"
-        if not mnemonic_file.exists():
+        # Need deployer key to be present (raw 64-hex private key)
+        key_file = CONFIG_DIR / "deployer.key"
+        if not key_file.exists():
             mnemonic = blockchain.get("deployer_mnemonic", "")
-            if mnemonic:
-                mnemonic_file.write_text(mnemonic)
-                _set_blockhost_ownership(mnemonic_file, 0o640)
-            else:
+            if not mnemonic:
                 return False, "Deployer mnemonic not available"
+            result = subprocess.run(
+                ["bhcrypt", "derive-key"] + mnemonic.split(),
+                capture_output=True, text=True, timeout=30,
+            )
+            if result.returncode != 0:
+                return False, f"Key derivation failed: {result.stderr.strip()}"
+            try:
+                key_data = json.loads(result.stdout.strip())
+                key_file.write_text(key_data["privateKey"])
+                _set_blockhost_ownership(key_file, 0o640)
+            except (json.JSONDecodeError, KeyError) as e:
+                return False, f"Could not parse derive-key output: {e}"
 
         env = {
             **os.environ,

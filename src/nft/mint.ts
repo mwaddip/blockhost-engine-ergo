@@ -195,9 +195,8 @@ export async function mintNft(params: MintNftParams): Promise<MintNftResult> {
     currentHeight,
   );
 
-  // Sign via node
-  const unsignedJson = unsignedTx.toPlainObject();
-  const signedTx = await provider.signTx(unsignedJson, [serverPrivKeyHex]);
+  // Sign via ergo-relay — pass full input boxes for signing context
+  const signedTx = await provider.signTx(unsignedTx, [serverPrivKeyHex], inputs);
 
   // Submit
   const txId = await provider.submitTx(signedTx);

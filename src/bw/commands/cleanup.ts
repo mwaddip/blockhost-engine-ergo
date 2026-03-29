@@ -92,7 +92,7 @@ export async function cleanupCommand(
         .payMinFee()
         .build();
 
-      const signedTx = await provider.signTx(unsignedTx, [privKeyHex]);
+      const signedTx = await provider.signTx(unsignedTx, [privKeyHex], boxes);
       const txId = await provider.submitTx(signedTx);
       console.log(`${role}: ${txId}`);
     } catch (err: unknown) {

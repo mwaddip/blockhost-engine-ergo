@@ -81,7 +81,12 @@ function main(): void {
     case "generate-mnemonic": {
       // 15-word mnemonic = 160 bits of entropy
       const mnemonic = generateMnemonic(english, 160);
-      process.stdout.write(mnemonic + "\n");
+      const derived = deriveErgoKey(mnemonic, IS_MAINNET);
+      process.stdout.write(JSON.stringify({
+        mnemonic,
+        privateKey: derived.privateKey,
+        address: derived.address,
+      }) + "\n");
       break;
     }
 
@@ -105,6 +110,21 @@ function main(): void {
       }
       const { address } = deriveErgoKey(mnemonic, IS_MAINNET);
       process.stdout.write(address + "\n");
+      break;
+    }
+
+    case "derive-key": {
+      const words = args.slice(1);
+      if (words.length === 0) die("Usage: bhcrypt derive-key <word1> <word2> ...");
+      const mnemonic = words.join(" ");
+      if (!validateMnemonic(mnemonic, english)) {
+        die("invalid mnemonic phrase");
+      }
+      const derived = deriveErgoKey(mnemonic, IS_MAINNET);
+      process.stdout.write(JSON.stringify({
+        privateKey: derived.privateKey,
+        address: derived.address,
+      }) + "\n");
       break;
     }
 

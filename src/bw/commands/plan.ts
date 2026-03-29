@@ -176,8 +176,8 @@ async function planCreateCommand(
     .payMinFee()
     .build();
 
-  // Sign via node and submit
-  const signedTx = await provider.signTx(unsignedTx, [privKeyHex]);
+  // Sign via ergo-relay — pass full input boxes for signing context
+  const signedTx = await provider.signTx(unsignedTx, [privKeyHex], inputs);
   const txId = await provider.submitTx(signedTx);
 
   console.log(txId);

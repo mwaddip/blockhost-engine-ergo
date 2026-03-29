@@ -198,7 +198,7 @@ interface ExplorerTx {
   outputs?: Array<{
     boxId: string;
     address: string;
-    additionalRegisters?: Record<string, string>;
+    additionalRegisters?: Record<string, string | { serializedValue: string }>;
   }>;
 }
 
@@ -257,7 +257,11 @@ async function processTransaction(
   if (!outputs || outputs.length === 0) return;
 
   for (const output of outputs) {
-    const r4 = output.additionalRegisters?.["R4"];
+    const r4Raw = output.additionalRegisters?.["R4"];
+    if (!r4Raw) continue;
+
+    // Explorer may return register as { serializedValue: "hex" } or plain "hex"
+    const r4 = typeof r4Raw === "string" ? r4Raw : r4Raw.serializedValue;
     if (!r4) continue;
 
     // Decode R4 register value to raw bytes
