@@ -285,8 +285,24 @@ fi
 cp "$PROJECT_DIR/scripts/signup-template.html" "$PKG_DIR/usr/share/blockhost/"
 cp "$PROJECT_DIR/scripts/signup-engine.js" "$PKG_DIR/usr/share/blockhost/"
 
-# ergo-relay is a separate package (ergo-relay.deb) — not shipped in this .deb
-# The engine depends on it via: Depends: ergo-relay (>= 0.1.0)
+# Build ergo-relay .deb from submodule (separate package, engine depends on it)
+RELAY_DIR="$PROJECT_DIR/ergo-relay"
+if [ -f "$RELAY_DIR/packaging/build.sh" ]; then
+    echo ""
+    echo "Building ergo-relay..."
+    chmod +x "$RELAY_DIR/packaging/build.sh"
+    "$RELAY_DIR/packaging/build.sh"
+    RELAY_DEB=$(find "$RELAY_DIR/packaging" -name "ergo-relay_*.deb" -type f | head -1)
+    if [ -n "$RELAY_DEB" ]; then
+        echo "  ergo-relay: $(du -h "$RELAY_DEB" | cut -f1)"
+        # Copy to same output dir as engine .deb
+        cp "$RELAY_DEB" "$SCRIPT_DIR/"
+    else
+        echo "WARNING: ergo-relay build produced no .deb"
+    fi
+else
+    echo "NOTE: ergo-relay submodule not checked out — skipping (install ergo-relay separately)"
+fi
 
 # Systemd services
 cp "$PROJECT_DIR/examples/blockhost-monitor.service" "$PKG_DIR/lib/systemd/system/blockhost-monitor.service"

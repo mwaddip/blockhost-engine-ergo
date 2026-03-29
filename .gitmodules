@@ -1,3 +1,6 @@
 [submodule "facts"]
 	path = facts
 	url = git@github.com:mwaddip/blockhost-facts.git
+[submodule "ergo-relay"]
+	path = ergo-relay
+	url = git@github.com:mwaddip/ergo-relay.git
