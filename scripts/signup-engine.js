@@ -1068,12 +1068,18 @@
             showStatus('subscribe-status', '<span class="spinner"></span>Building subscription transaction...', 'info');
 
             // ── Step C: Build and submit subscription transaction ─────────
+            //
+            // Uses Fleet SDK TransactionBuilder for correct EIP-12 output format.
+            // Register encoding uses Fleet SDK serializer (SPair, SInt, SLong, SColl, SByte).
+            // All time references use block height, not timestamps.
 
-            // C.1  Compute subscription parameters
+            var F = window.Fleet;
+            if (!F) throw new Error('Fleet SDK not loaded');
+
+            // C.1  Compute subscription parameters (block-height based)
             var totalPayment = plan.pricePerDay * BigInt(days);
-            var nowMs = BigInt(Date.now());
-            var expiryMs = nowMs + BigInt(days) * 86400000n;
-            var intervalMs = 86400000n;  // 1 day in milliseconds
+            var blocksPerDay = 720;
+            var intervalBlocks = blocksPerDay; // 1 day in blocks (~2 min/block)
             var ratePerInterval = plan.pricePerDay;
 
             // C.2  Get wallet UTXOs and current height
@@ -1087,30 +1093,35 @@
                 throw new Error('No UTXOs in wallet -- fund your wallet first');
             }
 
-            // C.3  The beacon token ID = first input's box ID (Ergo minting rule)
-            var beaconTokenId = utxos[0].boxId;
+            var lastCollectedHeight = height;
+            var expiryHeight = height + days * blocksPerDay;
 
-            // C.4  Parse payment asset from plan
+            // C.3  Parse payment asset from plan
             var paymentTokenId = plan.paymentAsset || '';
             var isErgPayment = !paymentTokenId;
 
-            // C.5  Compute the subscription box value
-            // For ERG payment: lock totalPayment in the subscription box
-            // For token payment: lock minimum box value + tokens
-            var minBoxValue = '1000000'; // 0.001 ERG minimum box value
+            // C.4  Compute the subscription box value
             var subscriptionBoxValue;
             if (isErgPayment) {
-                subscriptionBoxValue = totalPayment.toString();
+                subscriptionBoxValue = totalPayment;
             } else {
-                subscriptionBoxValue = minBoxValue;
+                subscriptionBoxValue = F.SAFE_MIN_BOX_VALUE;
             }
 
-            // C.6  Encode subscription registers
-            var r4Hex = encodeR4(planId, connectedErgoTree);
-            var r5Hex = encodeR5(totalPayment, ratePerInterval, intervalMs);
-            var r6Hex = encodeR6(nowMs, expiryMs);
-            var r7Hex = encodeR7(paymentTokenId);
-            var r8Hex = encodeR8(userEncryptedHex);
+            // C.5  Encode subscription registers using Fleet SDK serializer
+            //   R4: (Int, Coll[Byte])        — (planId, subscriberErgoTree)
+            //   R5: (Long, (Long, Int))       — (amountRemaining, (ratePerInterval, intervalBlocks))
+            //   R6: (Int, Int)               — (lastCollectedHeight, expiryHeight)
+            //   R7: Coll[Byte]               — paymentTokenId (empty for ERG)
+            //   R8: Coll[Byte]               — userEncrypted
+            var subscriberETBytes = F.hex.decode(connectedErgoTree);
+            var r4Hex = F.SPair(F.SInt(planId), F.SColl(F.SByte, subscriberETBytes)).toHex();
+            var r5Hex = F.SPair(F.SLong(totalPayment), F.SPair(F.SLong(ratePerInterval), F.SInt(intervalBlocks))).toHex();
+            var r6Hex = F.SPair(F.SInt(lastCollectedHeight), F.SInt(expiryHeight)).toHex();
+            var r7Bytes = paymentTokenId ? F.hex.decode(paymentTokenId) : new Uint8Array(0);
+            var r7Hex = F.SColl(F.SByte, r7Bytes).toHex();
+            var r8Bytes = userEncryptedHex ? F.hex.decode(userEncryptedHex) : new Uint8Array(0);
+            var r8Hex = F.SColl(F.SByte, r8Bytes).toHex();
 
             console.log('R4:', r4Hex.slice(0, 40) + '...');
             console.log('R5:', r5Hex);
@@ -1118,74 +1129,42 @@
             console.log('R7:', r7Hex.slice(0, 20) + '...');
             console.log('R8:', r8Hex.slice(0, 40) + '...');
 
-            // C.7  Build the subscription output box
-            var subscriptionOutput = {
-                value: subscriptionBoxValue,
-                ergoTree: CONFIG.subscriptionErgoTree,
-                creationHeight: height,
-                assets: [
-                    { tokenId: beaconTokenId, amount: '1' },
-                ],
-                additionalRegisters: {
-                    R4: r4Hex,
-                    R5: r5Hex,
-                    R6: r6Hex,
-                    R7: r7Hex,
-                    R8: r8Hex,
-                },
-            };
-
-            // C.8  Token payment: add payment token to subscription box
-            if (!isErgPayment) {
-                subscriptionOutput.assets.push({
-                    tokenId: paymentTokenId,
-                    amount: totalPayment.toString(),
-                });
-            }
-
-            // C.9  Optional deployer fee output
-            var outputs = [subscriptionOutput];
-
-            if (CONFIG.deployerAddress && CONFIG.deployerErgoTree) {
-                var deployerFee = '2500000'; // 0.0025 ERG deployer fee
-                outputs.push({
-                    value: deployerFee,
-                    ergoTree: CONFIG.deployerErgoTree,
-                    creationHeight: height,
-                    assets: [],
-                    additionalRegisters: {},
-                });
-            }
-
-            // C.10 Build the miner fee output (EIP-12 requires explicit fee box)
-            var minerFee = '1100000'; // 0.0011 ERG miner fee
-            outputs.push({
-                value: minerFee,
-                ergoTree: '1005040004000e36100204a00b08cd0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798ea02d192a39a8cc7a70173007301',
-                creationHeight: height,
-                assets: [],
-                additionalRegisters: {},
-            });
-
-            // C.11 Build the unsigned transaction (EIP-12 format)
+            // C.6  Build the subscription output using Fleet SDK OutputBuilder
             showStatus('subscribe-status', '<span class="spinner"></span>Building transaction...', 'info');
 
-            var unsignedTx = {
-                inputs: utxos.map(function (u) {
-                    return { boxId: u.boxId, extension: {} };
-                }),
-                dataInputs: [],
-                outputs: outputs,
-            };
+            var subOutput = new F.OutputBuilder(subscriptionBoxValue, CONFIG.subscriptionErgoTree)
+                .mintToken({ amount: 1n })  // beacon token (ID = first input boxId)
+                .setAdditionalRegisters({ R4: r4Hex, R5: r5Hex, R6: r6Hex, R7: r7Hex, R8: r8Hex });
 
-            console.log('Unsigned tx:', JSON.stringify(unsignedTx).slice(0, 200) + '...');
-            console.log('Inputs:', unsignedTx.inputs.length);
-            console.log('Outputs:', unsignedTx.outputs.length);
+            // C.7  Token payment: add payment token to subscription box
+            if (!isErgPayment) {
+                subOutput.addTokens({ tokenId: paymentTokenId, amount: totalPayment });
+            }
+
+            // C.8  Build transaction with Fleet SDK TransactionBuilder
+            var txBuilder = new F.TransactionBuilder(height)
+                .from(utxos)
+                .to(subOutput);
+
+            // C.9  Optional deployer fee output
+            if (CONFIG.deployerAddress) {
+                txBuilder.to(new F.OutputBuilder('2500000', CONFIG.deployerAddress));
+            }
+
+            var unsignedTx = txBuilder
+                .sendChangeTo(changeAddr)
+                .payMinFee()
+                .build();
+
+            var eip12Tx = unsignedTx.toEIP12Object();
+            var beaconTokenId = utxos[0].boxId;
+
+            console.log('EIP-12 tx inputs:', eip12Tx.inputs.length, 'outputs:', eip12Tx.outputs.length);
             console.log('Beacon token ID:', beaconTokenId);
 
-            // C.12 Sign via Nautilus (EIP-12)
+            // C.10 Sign via Nautilus (EIP-12)
             showStatus('subscribe-status', '<span class="spinner"></span>Awaiting wallet signature...', 'info');
-            var signedTx = await ergoCtx.sign_tx(unsignedTx);
+            var signedTx = await ergoCtx.sign_tx(eip12Tx);
 
             // C.13 Submit via Nautilus
             showStatus('subscribe-status', '<span class="spinner"></span>Submitting transaction...', 'info');
@@ -1592,43 +1571,27 @@
                 throw new Error('No UTXOs in wallet');
             }
 
-            // Build command output box with payload in R4
-            var adminErgoTree = CONFIG.adminAddress
-                ? ergoTreeFromAddress(CONFIG.adminAddress)
-                : connectedErgoTree;
+            // Build command output box with payload in R4 using Fleet SDK
+            var F = window.Fleet;
+            if (!F) throw new Error('Fleet SDK not loaded');
 
-            var r4Payload = sigmaEncodeCollByte(payloadHex);
+            var adminAddr = CONFIG.adminAddress || changeAddr;
+            var r4Payload = F.SColl(F.SByte, hexToBytes(payloadHex)).toHex();
 
-            var commandOutput = {
-                value: '1000000', // 0.001 ERG minimum
-                ergoTree: adminErgoTree,
-                creationHeight: height,
-                assets: [],
-                additionalRegisters: {
-                    R4: r4Payload,
-                },
-            };
+            var cmdOutput = new F.OutputBuilder(F.SAFE_MIN_BOX_VALUE, adminAddr)
+                .setAdditionalRegisters({ R4: r4Payload });
 
-            // Miner fee output
-            var minerFee = '1100000';
-            var feeOutput = {
-                value: minerFee,
-                ergoTree: '1005040004000e36100204a00b08cd0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798ea02d192a39a8cc7a70173007301',
-                creationHeight: height,
-                assets: [],
-                additionalRegisters: {},
-            };
+            var unsignedTx = new F.TransactionBuilder(height)
+                .from(utxos)
+                .to(cmdOutput)
+                .sendChangeTo(changeAddr)
+                .payMinFee()
+                .build();
 
-            var unsignedTx = {
-                inputs: utxos.map(function (u) {
-                    return { boxId: u.boxId, extension: {} };
-                }),
-                dataInputs: [],
-                outputs: [commandOutput, feeOutput],
-            };
+            var eip12Tx = unsignedTx.toEIP12Object();
 
             showStatus('command-status', '<span class="spinner"></span>Awaiting wallet signature...', 'info');
-            var signedTx = await ergoCtx.sign_tx(unsignedTx);
+            var signedTx = await ergoCtx.sign_tx(eip12Tx);
 
             showStatus('command-status', '<span class="spinner"></span>Submitting...', 'info');
             var txId = await ergoCtx.submit_tx(signedTx);

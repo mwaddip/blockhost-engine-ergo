@@ -282,9 +282,20 @@ if [ -f "$PROJECT_DIR/scripts/first-boot-hook.sh" ]; then
     chmod 755 "$PKG_DIR/usr/share/blockhost/engine-hooks/first-boot.sh"
 fi
 
-# Static resources (signup page template + engine)
+# Static resources (signup page template + engine + Fleet SDK browser bundle)
 cp "$PROJECT_DIR/scripts/signup-template.html" "$PKG_DIR/usr/share/blockhost/"
 cp "$PROJECT_DIR/scripts/signup-engine.js" "$PKG_DIR/usr/share/blockhost/"
+
+# Bundle Fleet SDK for browser (used by signup page and wizard)
+echo "Bundling Fleet SDK for browser..."
+npx esbuild "$PROJECT_DIR/scripts/fleet-browser.ts" \
+    --bundle --format=iife --target=es2020 --minify \
+    --outfile="$PKG_DIR/usr/share/blockhost/fleet-sdk.browser.js"
+echo "  fleet-sdk.browser.js ($(du -h "$PKG_DIR/usr/share/blockhost/fleet-sdk.browser.js" | cut -f1))"
+
+# Copy to wizard static dir too (served by Flask during wizard)
+mkdir -p "$WIZARD_DST/static"
+cp "$PKG_DIR/usr/share/blockhost/fleet-sdk.browser.js" "$WIZARD_DST/static/"
 
 # Build ergo-relay Rust binaries from submodule (shipped inside this .deb)
 RELAY_DIR="$PROJECT_DIR/ergo-relay"

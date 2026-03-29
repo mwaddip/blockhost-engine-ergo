@@ -6,6 +6,9 @@ build/
 *.js.map
 !engine.json
 !scripts/signup-engine.js
+!scripts/fleet-browser.ts
+!scripts/fleet-sdk.browser.js
+!blockhost/engine_ergo/static/fleet-sdk.browser.js
 .env
 *.key
 *.secret
