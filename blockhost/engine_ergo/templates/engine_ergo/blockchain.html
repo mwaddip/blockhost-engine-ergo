@@ -128,6 +128,15 @@
                             Fund this wallet with ERG to continue. At least <strong>1 ERG</strong> recommended
                             (contract deployment + NFT mint + plan creation + operational buffer).
                         </p>
+                        <div style="display: flex; gap: 0.5rem; align-items: center;">
+                            <input type="number" id="topup-amount" step="0.1" min="0.1" value="2" style="width: 6rem;">
+                            <span style="font-size: 0.875rem;">ERG</span>
+                            <button type="button" class="btn btn-small btn-primary"
+                                    onclick="topUpWallet('generate')" id="topup-btn">
+                                Fund via Wallet
+                            </button>
+                        </div>
+                        <div id="topup-status" class="text-muted mt-1" style="font-size: 0.75rem;"></div>
                     </div>
                 </div>
             </div>
@@ -164,6 +173,15 @@
                         Fund this wallet with ERG to continue. At least <strong>1 ERG</strong> recommended
                         (contract deployment + NFT mint + plan creation + operational buffer).
                     </p>
+                    <div style="display: flex; gap: 0.5rem; align-items: center;">
+                        <input type="number" id="import-topup-amount" step="0.1" min="0.1" value="2" style="width: 6rem;">
+                        <span style="font-size: 0.875rem;">ERG</span>
+                        <button type="button" class="btn btn-small btn-primary"
+                                onclick="topUpWallet('import')" id="import-topup-btn">
+                            Fund via Wallet
+                        </button>
+                    </div>
+                    <div id="import-topup-status" class="text-muted mt-1" style="font-size: 0.75rem;"></div>
                 </div>
             </div>
         </div>
@@ -578,6 +596,175 @@ networkSelect.addEventListener('change', function() {
         explorerUrlInput.placeholder = net === 'mainnet' ? 'https://api.ergoplatform.com' : 'https://api-testnet.ergoplatform.com';
     }
 });
+
+// ---- EIP-12 top-up transaction ----
+
+async function topUpWallet(mode) {
+    var deployerAddr = mode === 'generate'
+        ? document.getElementById('deployer-address').textContent.trim()
+        : document.getElementById('import-deployer-address').textContent.trim();
+    var amountInput = document.getElementById(mode === 'generate' ? 'topup-amount' : 'import-topup-amount');
+    var statusEl = document.getElementById(mode === 'generate' ? 'topup-status' : 'import-topup-status');
+    var btn = document.getElementById(mode === 'generate' ? 'topup-btn' : 'import-topup-btn');
+
+    var nanoErg = Math.floor(parseFloat(amountInput.value) * 1000000000);
+    if (!deployerAddr || deployerAddr === '-') { statusEl.textContent = 'Generate wallet first'; return; }
+    if (nanoErg < 100000000) { statusEl.textContent = 'Minimum 0.1 ERG'; return; }
+
+    // Detect Nautilus (or other EIP-12 wallet)
+    var connector = window.ergoConnector;
+    if (!connector) { statusEl.textContent = 'No Ergo wallet detected'; return; }
+
+    var KNOWN = ['nautilus', 'safew', 'minotaur'];
+    var walletName = null;
+    for (var k = 0; k < KNOWN.length; k++) {
+        if (connector[KNOWN[k]] && typeof connector[KNOWN[k]].connect === 'function') {
+            walletName = KNOWN[k]; break;
+        }
+    }
+    if (!walletName) {
+        var keys = Object.keys(connector);
+        for (var k = 0; k < keys.length; k++) {
+            if (connector[keys[k]] && typeof connector[keys[k]].connect === 'function') {
+                walletName = keys[k]; break;
+            }
+        }
+    }
+    if (!walletName) { statusEl.textContent = 'No EIP-12 wallet found'; return; }
+
+    btn.disabled = true;
+    statusEl.textContent = 'Connecting to ' + (connector[walletName].name || walletName) + '...';
+
+    try {
+        var connected = await connector[walletName].connect();
+        if (!connected) throw new Error('Connection rejected');
+
+        var api = window.ergo;
+        if (!api) throw new Error('Wallet API not available after connect');
+
+        // Get sender's change address and current height
+        var changeAddr = await api.get_change_address();
+        var currentHeight = await api.get_current_height();
+
+        // Get UTXOs — EIP-12 returns full box objects
+        var utxos = await api.get_utxos(nanoErg.toString());
+        if (!utxos || utxos.length === 0) {
+            utxos = await api.get_utxos();
+        }
+        if (!utxos || utxos.length === 0) throw new Error('No UTXOs in wallet');
+
+        // Derive deployer ErgoTree from address (Base58 decode)
+        var deployerErgoTree = addressToErgoTree(deployerAddr);
+
+        // Build unsigned transaction
+        var fee = 1100000; // 0.0011 ERG (standard Ergo min fee)
+        var target = nanoErg + fee;
+
+        // Select inputs (simple greedy)
+        var selected = [];
+        var inputTotal = 0;
+        for (var i = 0; i < utxos.length && inputTotal < target; i++) {
+            selected.push(utxos[i]);
+            inputTotal += parseInt(utxos[i].value);
+        }
+        if (inputTotal < target) throw new Error('Insufficient ERG (' + (inputTotal / 1e9).toFixed(4) + ' available)');
+
+        var changeAmount = inputTotal - nanoErg - fee;
+
+        // Build outputs
+        var outputs = [{
+            value: nanoErg.toString(),
+            ergoTree: deployerErgoTree,
+            creationHeight: currentHeight,
+            assets: [],
+            additionalRegisters: {}
+        }];
+
+        // Change output (return excess + any tokens from inputs)
+        if (changeAmount >= 1000000) { // min box value
+            var changeErgoTree = addressToErgoTree(changeAddr);
+
+            // Collect all tokens from inputs to return in change
+            var tokenMap = {};
+            for (var i = 0; i < selected.length; i++) {
+                var assets = selected[i].assets || [];
+                for (var j = 0; j < assets.length; j++) {
+                    var tid = assets[j].tokenId;
+                    var amt = BigInt(assets[j].amount);
+                    tokenMap[tid] = (tokenMap[tid] || 0n) + amt;
+                }
+            }
+            var changeTokens = [];
+            var tokenIds = Object.keys(tokenMap);
+            for (var i = 0; i < tokenIds.length; i++) {
+                changeTokens.push({ tokenId: tokenIds[i], amount: tokenMap[tokenIds[i]].toString() });
+            }
+
+            outputs.push({
+                value: changeAmount.toString(),
+                ergoTree: changeErgoTree,
+                creationHeight: currentHeight,
+                assets: changeTokens,
+                additionalRegisters: {}
+            });
+        }
+
+        // Fee output (Ergo miners fee box)
+        outputs.push({
+            value: fee.toString(),
+            ergoTree: '1005040004000e36100204a00b08cd0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798ea02d192a39a8cc7a70173007301',
+            creationHeight: currentHeight,
+            assets: [],
+            additionalRegisters: {}
+        });
+
+        // Build unsigned tx in EIP-12 format
+        var unsignedTx = {
+            inputs: selected.map(function(box) {
+                return { boxId: box.boxId, extension: {} };
+            }),
+            dataInputs: [],
+            outputs: outputs
+        };
+
+        statusEl.textContent = 'Confirm in wallet...';
+        var signedTx = await api.sign_tx(unsignedTx);
+
+        statusEl.textContent = 'Submitting...';
+        var txId = await api.submit_tx(signedTx);
+
+        statusEl.innerHTML = 'Sent! tx: <code style="font-size: 0.7rem;">' + txId.slice(0, 16) + '...</code> — click Refresh after ~2 min';
+        btn.disabled = false;
+
+        // Start auto-refresh to detect when funds arrive
+        startAutoRefresh(mode);
+    } catch (e) {
+        btn.disabled = false;
+        if (e.code === 1 || (e.message && e.message.indexOf('rejected') !== -1) || (e.message && e.message.indexOf('denied') !== -1)) {
+            statusEl.textContent = 'Cancelled by user.';
+        } else {
+            statusEl.textContent = 'Error: ' + (e.message || e.info || e);
+        }
+    }
+}
+
+// Derive ErgoTree hex from a Base58 Ergo address (P2PK: 0008cd + pubkey)
+function addressToErgoTree(addr) {
+    var ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+    var num = 0n;
+    for (var i = 0; i < addr.length; i++) {
+        var idx = ALPHABET.indexOf(addr[i]);
+        if (idx < 0) throw new Error('Invalid Base58');
+        num = num * 58n + BigInt(idx);
+    }
+    var hex = num.toString(16);
+    if (hex.length % 2) hex = '0' + hex;
+    // Address = type_byte(1) + pubkey(33) + checksum(4) = 38 bytes = 76 hex
+    // Pad to 76 hex if needed
+    while (hex.length < 76) hex = '0' + hex;
+    var pubkeyHex = hex.slice(2, 68); // skip type byte (2 hex), take 33 bytes (66 hex)
+    return '0008cd' + pubkeyHex;
+}
 
 // Initialize radio button styling
 document.querySelectorAll('input[type="radio"]:checked').forEach(function(radio) {
