@@ -707,14 +707,8 @@ async function topUpWallet(mode) {
             });
         }
 
-        // Fee output (Ergo miners fee box)
-        outputs.push({
-            value: fee.toString(),
-            ergoTree: '1005040004000e36100204a00b08cd0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798ea02d192a39a8cc7a70173007301',
-            creationHeight: currentHeight,
-            assets: [],
-            additionalRegisters: {}
-        });
+        // No explicit fee output — in Ergo, fee = sum(inputs) - sum(outputs).
+        // Nautilus adds the fee box internally during signing.
 
         // Build unsigned tx in EIP-12 format
         var unsignedTx = {
@@ -722,7 +716,8 @@ async function topUpWallet(mode) {
                 return { boxId: box.boxId, extension: {} };
             }),
             dataInputs: [],
-            outputs: outputs
+            outputs: outputs,
+            fee: fee.toString()
         };
 
         statusEl.textContent = 'Confirm in wallet...';
