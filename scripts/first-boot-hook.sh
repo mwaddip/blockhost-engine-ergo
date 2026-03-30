@@ -25,24 +25,10 @@ if command -v ergo-relay >/dev/null 2>&1; then
     }
     sleep 1  # Give relay a moment to bind port
   fi
-  # Run peer discovery until at least one peer is found.
-  # P2P broadcast needs peers — without them, tx submission falls back to explorer only.
+  # Run peer discovery — retries internally until peers are found or gives up
   if command -v ergo-peers >/dev/null 2>&1; then
-    PEERS_FILE="/var/lib/blockhost/ergo-peers.json"
-    for attempt in 1 2 3; do
-      log "Peer discovery attempt $attempt..."
-      ergo-peers >> "$LOG_FILE" 2>&1 || true
-      if [ -f "$PEERS_FILE" ] && grep -q '"count":[^0]' "$PEERS_FILE" 2>/dev/null; then
-        PEER_COUNT=$(python3 -c "import json; print(json.load(open('$PEERS_FILE'))['count'])" 2>/dev/null || echo 0)
-        log "Discovered $PEER_COUNT peer(s)"
-        break
-      fi
-      log "No peers found yet, retrying in 5s..."
-      sleep 5
-    done
-    if [ ! -f "$PEERS_FILE" ] || grep -q '"count":0' "$PEERS_FILE" 2>/dev/null; then
-      log "WARNING: No peers discovered after 3 attempts — P2P broadcast may fail, explorer fallback will be used"
-    fi
+    log "Running peer discovery..."
+    ergo-peers >> "$LOG_FILE" 2>&1 || log "WARNING: Peer discovery failed — P2P broadcast may not work"
   fi
 fi
 
