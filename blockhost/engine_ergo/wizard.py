@@ -848,9 +848,11 @@ def finalize_contracts(config: dict) -> tuple[bool, Optional[str]]:
             if not confirmed:
                 return False, f"Registration box tx not confirmed: {err}"
 
-        # Set nft_contract to subscription address for broker verification
-        if sub_address:
-            blockchain["nft_contract"] = sub_address
+        # Set nft_contract to registration tx ID for broker verification.
+        # 64-char hex, on-chain proof that the operator deployed. The broker
+        # verifies this tx exists on the Ergo explorer.
+        if reg_tx:
+            blockchain["nft_contract"] = reg_tx
 
         config["blockchain"] = blockchain
         config["_step_result_contracts"] = {
@@ -908,8 +910,7 @@ def finalize_chain_config(config: dict) -> tuple[bool, Optional[str]]:
         bridge = provisioner.get("bridge") or _discover_bridge()
 
         # --- web3-defaults.yaml ---
-        sub_address = blockchain.get("subscription_address", "")
-        nft_contract = blockchain.get("nft_contract", sub_address)
+        nft_contract = blockchain.get("nft_contract", "")
 
         web3_blockchain: dict = {
             "network": network,
