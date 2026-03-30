@@ -25,6 +25,11 @@ if command -v ergo-relay >/dev/null 2>&1; then
     }
     sleep 1  # Give relay a moment to bind port
   fi
+  # Run initial peer discovery so relay has peers for P2P broadcast
+  if command -v ergo-peers >/dev/null 2>&1; then
+    log "Running initial peer discovery..."
+    ergo-peers >> "$LOG_FILE" 2>&1 || log "Peer discovery failed (non-fatal)"
+  fi
 fi
 
 # Ensure signer_url is in web3-defaults
