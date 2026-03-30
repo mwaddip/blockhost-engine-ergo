@@ -840,31 +840,19 @@ def finalize_contracts(config: dict) -> tuple[bool, Optional[str]]:
         if ref_tree:
             blockchain["reference_ergo_tree"] = ref_tree
             blockchain["reference_contract"] = ref_tree
-        config["blockchain"] = blockchain
 
-        # Create registration box at the subscription P2S address.
-        # This gives the guard address on-chain presence so the broker
-        # can verify the operator actually deployed (anti-spam).
+        # Registration box tx was created by deploy-contracts — wait for confirmation
+        reg_tx = kv.get("registration_tx", "")
+        if reg_tx:
+            confirmed, err = _wait_for_tx_confirmation(reg_tx, blockchain)
+            if not confirmed:
+                return False, f"Registration box tx not confirmed: {err}"
+
+        # Set nft_contract to subscription address for broker verification
         if sub_address:
-            try:
-                reg_result = subprocess.run(
-                    ["bw", "send", "0.001", "erg", "server", sub_address],
-                    capture_output=True, text=True, timeout=300, env=env,
-                )
-                if reg_result.returncode == 0:
-                    tx_id = reg_result.stdout.strip()
-                    if tx_id:
-                        confirmed, err = _wait_for_tx_confirmation(tx_id, blockchain)
-                        if not confirmed:
-                            return False, f"Registration box tx not confirmed: {err}"
-                    # Set nft_contract to the subscription address for broker verification
-                    blockchain["nft_contract"] = sub_address
-                    config["blockchain"] = blockchain
-                else:
-                    return False, f"Registration box creation failed: {reg_result.stderr or reg_result.stdout}"
-            except subprocess.TimeoutExpired:
-                return False, "Registration box creation timed out"
+            blockchain["nft_contract"] = sub_address
 
+        config["blockchain"] = blockchain
         config["_step_result_contracts"] = {
             "subscription_ergo_tree": sub_tree,
             "reference_ergo_tree": ref_tree,
@@ -872,9 +860,7 @@ def finalize_contracts(config: dict) -> tuple[bool, Optional[str]]:
 
         # Write contracts.yaml
         contracts_path = CONFIG_DIR / "contracts.yaml"
-        contracts_data = {
-            "subscription_ergo_tree": sub_tree,
-        }
+        contracts_data = {"subscription_ergo_tree": sub_tree}
         if sub_address:
             contracts_data["subscription_address"] = sub_address
         if ref_tree:

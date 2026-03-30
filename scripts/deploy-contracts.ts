@@ -17,8 +17,15 @@
 
 import * as fs from "fs";
 import * as yaml from "js-yaml";
+import {
+  TransactionBuilder,
+  OutputBuilder,
+  SAFE_MIN_BOX_VALUE,
+} from "@fleet-sdk/core";
+import type { Box, Amount } from "@fleet-sdk/common";
 
 import { loadNetworkConfig } from "../src/fund-manager/web3-config.js";
+import { createProvider } from "../src/ergo/provider.js";
 import {
   addressFromPrivateKey,
   publicKeyFromAddress,
@@ -111,6 +118,31 @@ async function main(): Promise<void> {
     const outPath = `${CONFIG_DIR}/contracts.yaml`;
     fs.writeFileSync(outPath, yamlStr, "utf8");
     console.error(`Contract config written to: ${outPath}`);
+  }
+
+  // -- Create registration box at subscription P2S address -------------------
+  // Gives the guard address on-chain presence for broker anti-spam verification.
+  if (!dryRun) {
+    console.error("Creating registration box at subscription address...");
+    const provider = createProvider(config.explorerUrl, config.signerUrl, config.submitUrl);
+    const inputs = await provider.getUnspentBoxes(serverAddress);
+
+    if (inputs.length === 0) {
+      console.error("WARNING: No UTXOs at server address — skipping registration box");
+    } else {
+      const height = await provider.getHeight();
+      const unsignedTx = new TransactionBuilder(height)
+        .from(inputs as unknown as Box<Amount>[])
+        .to(new OutputBuilder(SAFE_MIN_BOX_VALUE, subscriptionAddress))
+        .sendChangeTo(serverAddress)
+        .payMinFee()
+        .build();
+
+      const signedTx = await provider.signTx(unsignedTx, [privKeyHex], inputs);
+      const txId = await provider.submitTx(signedTx);
+      console.error(`Registration box tx: ${txId}`);
+      console.log(`registration_tx=${txId}`);
+    }
   }
 
   // Machine-readable output for the wizard (key=value on stdout)
