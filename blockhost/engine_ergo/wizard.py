@@ -758,9 +758,9 @@ def finalize_contracts(config: dict) -> tuple[bool, Optional[str]]:
             }
             return True, None
 
-        # Deploy mode -- idempotent if already have ErgoTree
+        # Deploy mode -- skip only if we already have both ErgoTree AND nft_contract
         sub_tree = blockchain.get("subscription_ergo_tree", "")
-        if sub_tree:
+        if sub_tree and blockchain.get("nft_contract"):
             blockchain["subscription_contract"] = sub_tree
             ref_tree = blockchain.get("reference_ergo_tree", "")
             if ref_tree:
