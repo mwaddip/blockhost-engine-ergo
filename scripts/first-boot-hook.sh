@@ -12,6 +12,21 @@ LOG_FILE="${LOG_FILE:-/var/log/blockhost-first-boot.log}"
 
 log() { echo "[ergo] $*" | tee -a "$LOG_FILE"; }
 
+# Start ergo-relay signer — needed for tx signing during finalization.
+# The relay is bundled in the engine .deb, so its postinst doesn't run separately.
+if command -v ergo-relay >/dev/null 2>&1; then
+  if ! pgrep -x ergo-relay >/dev/null 2>&1; then
+    log "Starting ergo-relay..."
+    systemctl enable ergo-relay ergo-peers.timer 2>/dev/null || true
+    systemctl start ergo-relay 2>/dev/null || {
+      # Fallback: run directly if systemd unit not available
+      ergo-relay &
+      log "Started ergo-relay (direct, pid $!)"
+    }
+    sleep 1  # Give relay a moment to bind port
+  fi
+fi
+
 # Ensure signer_url is in web3-defaults
 if [ -f /etc/blockhost/web3-defaults.yaml ]; then
   if ! grep -q "signer_url" /etc/blockhost/web3-defaults.yaml; then
