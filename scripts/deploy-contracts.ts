@@ -59,8 +59,22 @@ async function main(): Promise<void> {
   const privKeyHex = fs.readFileSync(keyPath, "utf8").trim();
 
   // -- Load network config -------------------------------------------------
+  // Prefer env vars (set by wizard) over web3-defaults.yaml (may not exist yet)
 
-  const config = loadNetworkConfig();
+  let config: import("../src/fund-manager/web3-config.js").ErgoNetworkConfig;
+  const envNetwork = process.env["ERGO_NETWORK"];
+  const envExplorer = process.env["ERGO_EXPLORER_URL"];
+  if (envNetwork || envExplorer) {
+    config = {
+      explorerUrl: envExplorer || (envNetwork === "testnet"
+        ? "https://api-testnet.ergoplatform.com"
+        : "https://api.ergoplatform.com"),
+      signerUrl: process.env["ERGO_SIGNER_URL"] || "http://127.0.0.1:9064",
+      network: (envNetwork || "mainnet") as "mainnet" | "testnet",
+    };
+  } else {
+    config = loadNetworkConfig();
+  }
   const mainnet = config.network === "mainnet";
 
   const serverAddress = addressFromPrivateKey(privKeyHex, mainnet);
@@ -128,7 +142,10 @@ async function main(): Promise<void> {
     const inputs = await provider.getUnspentBoxes(serverAddress);
 
     if (inputs.length === 0) {
-      console.error("WARNING: No UTXOs at server address — skipping registration box");
+      console.error("ERROR: No UTXOs at server address — cannot create registration box");
+      console.error(`Server address: ${serverAddress}`);
+      console.error(`Explorer: ${config.explorerUrl}`);
+      process.exit(1);
     } else {
       const height = await provider.getHeight();
       const unsignedTx = new TransactionBuilder(height)

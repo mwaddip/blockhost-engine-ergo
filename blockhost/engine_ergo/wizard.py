@@ -791,9 +791,11 @@ def finalize_contracts(config: dict) -> tuple[bool, Optional[str]]:
             except (json.JSONDecodeError, KeyError) as e:
                 return False, f"Could not parse derive-key output: {e}"
 
+        explorer_url = blockchain.get("explorer_url", "") or _explorer_url(blockchain)
         env = {
             **os.environ,
             "ERGO_NETWORK": network,
+            "ERGO_EXPLORER_URL": explorer_url,
         }
         if node_url:
             env["ERGO_NODE_URL"] = node_url
