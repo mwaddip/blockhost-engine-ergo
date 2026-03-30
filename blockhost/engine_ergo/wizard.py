@@ -827,33 +827,62 @@ def finalize_contracts(config: dict) -> tuple[bool, Optional[str]]:
                 kv[key.strip()] = val.strip()
 
         sub_tree = kv.get("subscription_ergo_tree", "")
+        sub_address = kv.get("subscription_address", "")
         ref_tree = kv.get("reference_ergo_tree", "")
 
-        if sub_tree:
-            blockchain["subscription_ergo_tree"] = sub_tree
-            blockchain["subscription_contract"] = sub_tree
-            if ref_tree:
-                blockchain["reference_ergo_tree"] = ref_tree
-                blockchain["reference_contract"] = ref_tree
-            config["blockchain"] = blockchain
-            config["_step_result_contracts"] = {
-                "subscription_ergo_tree": sub_tree,
-                "reference_ergo_tree": ref_tree,
-            }
+        if not sub_tree:
+            return False, f"Expected subscription_ergo_tree in output, got: {list(kv.keys())}"
 
-            # Write contracts.yaml
-            contracts_path = CONFIG_DIR / "contracts.yaml"
-            contracts_data = {
-                "subscription_ergo_tree": sub_tree,
-            }
-            if ref_tree:
-                contracts_data["reference_ergo_tree"] = ref_tree
-            _write_yaml(contracts_path, contracts_data)
-            _set_blockhost_ownership(contracts_path, 0o640)
+        blockchain["subscription_ergo_tree"] = sub_tree
+        blockchain["subscription_contract"] = sub_tree
+        if sub_address:
+            blockchain["subscription_address"] = sub_address
+        if ref_tree:
+            blockchain["reference_ergo_tree"] = ref_tree
+            blockchain["reference_contract"] = ref_tree
+        config["blockchain"] = blockchain
 
-            return True, None
+        # Create registration box at the subscription P2S address.
+        # This gives the guard address on-chain presence so the broker
+        # can verify the operator actually deployed (anti-spam).
+        if sub_address:
+            try:
+                reg_result = subprocess.run(
+                    ["bw", "send", "0.001", "erg", "server", sub_address],
+                    capture_output=True, text=True, timeout=300, env=env,
+                )
+                if reg_result.returncode == 0:
+                    tx_id = reg_result.stdout.strip()
+                    if tx_id:
+                        confirmed, err = _wait_for_tx_confirmation(tx_id, blockchain)
+                        if not confirmed:
+                            return False, f"Registration box tx not confirmed: {err}"
+                    # Set nft_contract to the subscription address for broker verification
+                    blockchain["nft_contract"] = sub_address
+                    config["blockchain"] = blockchain
+                else:
+                    return False, f"Registration box creation failed: {reg_result.stderr or reg_result.stdout}"
+            except subprocess.TimeoutExpired:
+                return False, "Registration box creation timed out"
 
-        return False, f"Expected subscription_ergo_tree in output, got: {list(kv.keys())}"
+        config["_step_result_contracts"] = {
+            "subscription_ergo_tree": sub_tree,
+            "reference_ergo_tree": ref_tree,
+        }
+
+        # Write contracts.yaml
+        contracts_path = CONFIG_DIR / "contracts.yaml"
+        contracts_data = {
+            "subscription_ergo_tree": sub_tree,
+        }
+        if sub_address:
+            contracts_data["subscription_address"] = sub_address
+        if ref_tree:
+            contracts_data["reference_ergo_tree"] = ref_tree
+        _write_yaml(contracts_path, contracts_data)
+        _set_blockhost_ownership(contracts_path, 0o640)
+
+        return True, None
 
     except subprocess.TimeoutExpired:
         return False, "Contract deployment timed out (5 minutes)"
@@ -893,12 +922,16 @@ def finalize_chain_config(config: dict) -> tuple[bool, Optional[str]]:
         bridge = provisioner.get("bridge") or _discover_bridge()
 
         # --- web3-defaults.yaml ---
+        sub_address = blockchain.get("subscription_address", "")
+        nft_contract = blockchain.get("nft_contract", sub_address)
+
         web3_blockchain: dict = {
             "network": network,
             "node_url": node_url,
             "explorer_url": explorer_url,
             "subscription_ergo_tree": sub_tree,
             "subscription_contract": sub_tree,
+            "nft_contract": nft_contract,
             "server_public_key": server_pubkey,
         }
         if ref_tree:

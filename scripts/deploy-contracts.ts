@@ -115,6 +115,7 @@ async function main(): Promise<void> {
 
   // Machine-readable output for the wizard (key=value on stdout)
   console.log(`subscription_ergo_tree=${subscriptionErgoTree}`);
+  console.log(`subscription_address=${subscriptionAddress}`);
   console.log(`reference_ergo_tree=${referenceErgoTree}`);
   console.error("Done.");
 }
