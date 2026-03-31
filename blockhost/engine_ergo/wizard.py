@@ -923,6 +923,8 @@ def finalize_chain_config(config: dict) -> tuple[bool, Optional[str]]:
             "nft_contract": nft_contract,
             "server_public_key": server_pubkey,
         }
+        if deployer_address:
+            web3_blockchain["deployer_address"] = deployer_address
         if ref_tree:
             web3_blockchain["reference_ergo_tree"] = ref_tree
             web3_blockchain["reference_contract"] = ref_tree

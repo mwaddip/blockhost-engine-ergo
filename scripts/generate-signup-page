@@ -184,9 +184,23 @@ def generate_page(config: dict, template: str) -> str:
         sys.exit(1)
 
     # Compute ErgoTrees from addresses
-    server_address = config.get('server_address', bc.get('server_address', ''))
-    deployer_address = config.get('deployer_address', bc.get('deployer_address', ''))
-    admin_address = config.get('admin_address', bc.get('admin_address', ''))
+    # server_address can come from: addressbook.json (loaded above),
+    # top-level key, blockchain.* sub-key, or server.address (blockhost.yaml)
+    server_address = (
+        config.get('server_address', '')
+        or bc.get('server_address', '')
+        or config.get('server', {}).get('address', '')
+    )
+    deployer_address = (
+        config.get('deployer_address', '')
+        or bc.get('deployer_address', '')
+        or server_address  # deployer IS the server on Ergo
+    )
+    admin_address = (
+        config.get('admin_address', '')
+        or bc.get('admin_address', '')
+        or config.get('admin', {}).get('wallet_address', '')
+    )
 
     deployer_ergo_tree = ''
     if deployer_address:

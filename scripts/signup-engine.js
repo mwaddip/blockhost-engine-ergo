@@ -841,13 +841,14 @@
         var sel = document.getElementById('plan-select');
 
         // We need the deployer/server address to find plan boxes
-        if (!CONFIG.serverAddress) {
+        var planAddress = CONFIG.serverAddress || CONFIG.deployerAddress;
+        if (!planAddress) {
             sel.innerHTML = '<option value="">Server address not configured</option>';
             return;
         }
 
         try {
-            var serverErgoTree = ergoTreeFromAddress(CONFIG.serverAddress);
+            var serverErgoTree = ergoTreeFromAddress(planAddress);
             var boxes = null;
 
             // Try node API first (via proxy)
