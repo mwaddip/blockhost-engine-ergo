@@ -96,11 +96,14 @@ def validate_ergo_tree(tree: str) -> bool:
 
 
 def validate_signature(sig: str) -> bool:
-    """Validate hex signature format (even-length hex, at least 64 chars)."""
+    """Validate hex key material (even-length hex, at least 8 chars).
+
+    Accepts hex-encoded publicSecret+password string from the wizard.
+    """
     if not sig or not isinstance(sig, str):
         return False
     sig = sig.strip()
-    return bool(re.match(r"^[0-9a-fA-F]{64,}$", sig))
+    return bool(re.match(r"^[0-9a-fA-F]{8,}$", sig))
 
 
 def _wait_for_tx_confirmation(

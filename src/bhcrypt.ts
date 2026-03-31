@@ -44,6 +44,11 @@ function requireHex(value: string, label: string): void {
   }
 }
 
+function isHex(value: string): boolean {
+  const clean = value.startsWith("0x") ? value.slice(2) : value;
+  return /^[0-9a-fA-F]+$/.test(clean) && clean.length % 2 === 0 && clean.length > 0;
+}
+
 /**
  * Derive an Ergo private key and address from a BIP39 mnemonic.
  * Uses BIP32 secp256k1 derivation with path m/44'/429'/0'/0/0 (EIP-3).
@@ -129,20 +134,21 @@ function main(): void {
     }
 
     case "encrypt-symmetric": {
-      const keyHex = args[1];
+      const keyInput = args[1];
       const plaintext = args[2];
-      if (!keyHex || !plaintext) die("Usage: bhcrypt encrypt-symmetric <key-hex> <data>");
-      requireHex(keyHex, "key");
+      if (!keyInput || !plaintext) die("Usage: bhcrypt encrypt-symmetric <key-hex-or-utf8> <data>");
+      // Accept hex or plain UTF-8 (auto-detect: valid even-length hex → use as-is, otherwise hex-encode)
+      const keyHex = isHex(keyInput) ? keyInput : Buffer.from(keyInput, "utf8").toString("hex");
       const result = symmetricEncrypt(keyHex, plaintext);
       process.stdout.write(result + "\n");
       break;
     }
 
     case "decrypt-symmetric": {
-      const keyHex = args[1];
+      const dkeyInput = args[1];
       const ciphertextHex = args[2];
-      if (!keyHex || !ciphertextHex) die("Usage: bhcrypt decrypt-symmetric <key-hex> <ciphertext-hex>");
-      requireHex(keyHex, "key");
+      if (!dkeyInput || !ciphertextHex) die("Usage: bhcrypt decrypt-symmetric <key-hex-or-utf8> <ciphertext-hex>");
+      const keyHex = isHex(dkeyInput) ? dkeyInput : Buffer.from(dkeyInput, "utf8").toString("hex");
       requireHex(ciphertextHex, "ciphertext");
       const result = symmetricDecrypt(keyHex, ciphertextHex);
       process.stdout.write(result + "\n");

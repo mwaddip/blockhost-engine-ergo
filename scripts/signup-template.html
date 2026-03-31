@@ -303,6 +303,13 @@
                     <div class="step-desc">Sign your credentials and submit the subscription transaction</div>
                 </div>
             </div>
+            <div class="form-group" style="margin-bottom: 0.75rem;">
+                <label style="font-size: 0.85rem; color: var(--text-muted);">Encryption Password</label>
+                <input type="password" id="subscribe-password" placeholder="Password to encrypt connection details" style="width: 100%; padding: 0.5rem; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; color: var(--text);">
+                <label style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0.25rem;">Verify Password</label>
+                <input type="password" id="subscribe-password-verify" placeholder="Repeat password" style="width: 100%; padding: 0.5rem; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; color: var(--text);">
+                <p style="font-size: 0.7rem; color: var(--text-muted); margin-top: 0.25rem;">You'll need this password later to decrypt your VM connection details.</p>
+            </div>
             <button id="btn-subscribe" disabled>Subscribe</button>
             <div id="subscribe-status"></div>
         </div>
@@ -349,7 +356,10 @@
                 </div>
                 <div id="server-list" class="hidden"></div>
                 <div id="servers-decrypt" class="hidden">
-                    <button id="btn-decrypt-wallet">Sign to Decrypt Connection Info</button>
+                    <div class="form-group" style="margin-bottom: 0.5rem;">
+                        <input type="password" id="decrypt-password" placeholder="Enter your encryption password" style="width: 100%; padding: 0.5rem; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; color: var(--text);">
+                    </div>
+                    <button id="btn-decrypt-wallet">Decrypt Connection Info</button>
                     <div id="decrypt-wallet-status"></div>
                 </div>
                 <div id="connection-result" class="hidden">
@@ -389,8 +399,8 @@
                     </div>
 
                     <div class="form-group">
-                        <label for="offline-signature">Paste Your Signature (hex)</label>
-                        <textarea id="offline-signature" placeholder="Hex-encoded signature from your wallet..."></textarea>
+                        <label for="offline-password">Encryption Password</label>
+                        <input type="password" id="offline-password" placeholder="Enter your encryption password" style="width: 100%; padding: 0.5rem; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; color: var(--text);">
                     </div>
 
                     <button id="btn-decrypt-offline">Decrypt Connection Info</button>

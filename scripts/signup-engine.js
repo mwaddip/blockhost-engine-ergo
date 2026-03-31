@@ -1037,32 +1037,20 @@
             if (!CONFIG.serverPublicKey) throw new Error('Server public key not configured');
             if (!CONFIG.subscriptionErgoTree) throw new Error('Subscription contract not configured');
 
-            // ── Step A: sign publicSecret to derive user credentials ──────
-            showStatus('subscribe-status', '<span class="spinner"></span>Signing credentials with wallet...', 'info');
+            // ── Step A: get encryption password ──────
+            var subPassword = document.getElementById('subscribe-password') ? document.getElementById('subscribe-password').value : '';
+            var subPasswordVerify = document.getElementById('subscribe-password-verify') ? document.getElementById('subscribe-password-verify').value : '';
+            if (!subPassword) throw new Error('Please enter an encryption password');
+            if (subPassword !== subPasswordVerify) throw new Error('Passwords do not match');
 
-            // EIP-12 sign_data takes an address (Base58) and a message (string)
-            var signResult = await ergoCtx.sign_data(connectedAddress, CONFIG.publicSecret);
+            // Derive key material: hex-encode publicSecret+password
+            var combined = CONFIG.publicSecret + subPassword;
+            var combinedHex = bytesToHex(new TextEncoder().encode(combined));
 
-            // signResult from Nautilus is a proof string (signature)
-            // We need to extract usable bytes for ECIES encryption
-            var rawSigHex;
-            if (typeof signResult === 'string') {
-                rawSigHex = signResult;
-            } else if (signResult && signResult.signedMessage) {
-                rawSigHex = signResult.signedMessage;
-            } else if (signResult && signResult.proof) {
-                rawSigHex = signResult.proof;
-            } else {
-                // Fallback: stringify the entire result
-                rawSigHex = bytesToHex(new TextEncoder().encode(JSON.stringify(signResult)));
-            }
-
-            console.log('rawSigHex:', rawSigHex.length, 'chars (' + (rawSigHex.length / 2) + ' bytes)');
-
-            // ── Step B: ECIES encrypt the raw signature with server pubkey
+            // ── Step B: ECIES encrypt the key material with server pubkey
             showStatus('subscribe-status', '<span class="spinner"></span>Encrypting credentials...', 'info');
 
-            var userEncryptedHex = await eciesEncrypt(CONFIG.serverPublicKey, rawSigHex);
+            var userEncryptedHex = await eciesEncrypt(CONFIG.serverPublicKey, combinedHex);
             console.log('userEncryptedHex length:', userEncryptedHex.length, 'bytes:', userEncryptedHex.length / 2);
 
             updateStep(3, 'done');
@@ -1368,7 +1356,7 @@
 
     var btnDecryptWallet = document.getElementById('btn-decrypt-wallet');
     if (btnDecryptWallet) btnDecryptWallet.addEventListener('click', async function () {
-        if (!selectedNft || !ergoCtx) return;
+        if (!selectedNft) return;
 
         var btn = document.getElementById('btn-decrypt-wallet');
         var statusEl = document.getElementById('decrypt-wallet-status');
@@ -1376,28 +1364,20 @@
         try {
             btn.disabled = true;
 
+            var decryptPw = document.getElementById('decrypt-password') ? document.getElementById('decrypt-password').value : '';
+            if (!decryptPw) throw new Error('Please enter your encryption password');
+
             showStatus('decrypt-wallet-status', '<span class="spinner"></span>Fetching NFT data...', 'info');
             var userEncHex = await fetchUserEncrypted(selectedNft.tokenId);
             if (!userEncHex) throw new Error('No encrypted data found for token ' + selectedNft.tokenId.slice(0, 16) + '...');
 
-            showStatus('decrypt-wallet-status', '<span class="spinner"></span>Sign the message in your wallet...', 'info');
-            var signResult = await ergoCtx.sign_data(connectedAddress, CONFIG.publicSecret);
-
-            // Extract signature bytes
-            var rawSig;
-            if (typeof signResult === 'string') {
-                rawSig = signResult;
-            } else if (signResult && signResult.signedMessage) {
-                rawSig = signResult.signedMessage;
-            } else if (signResult && signResult.proof) {
-                rawSig = signResult.proof;
-            } else {
-                rawSig = bytesToHex(new TextEncoder().encode(JSON.stringify(signResult)));
-            }
-
             showStatus('decrypt-wallet-status', '<span class="spinner"></span>Decrypting...', 'info');
+
+            // Derive key: SHAKE256(publicSecret + password)
+            var combined = CONFIG.publicSecret + decryptPw;
+            var combinedBytes = new TextEncoder().encode(combined);
             await ensureShake256();
-            var keyBytes = deriveSymmetricKey(hexToBytes(rawSig));
+            var keyBytes = deriveSymmetricKey(combinedBytes);
             var decrypted = await decryptAesGcm(keyBytes, userEncHex);
 
             document.getElementById('connection-info').textContent = decrypted;
@@ -1443,10 +1423,7 @@
             document.getElementById('offline-public-secret').textContent = CONFIG.publicSecret;
             document.getElementById('offline-encrypted-data').textContent = userEncHex;
             document.getElementById('offline-cli-instructions').innerHTML =
-                'Sign the publicSecret message with your Ergo wallet and paste the signature below.<br><br>' +
-                'Using Nautilus or another EIP-12 wallet, sign the message:<br>' +
-                '<code>"' + escapeHtml(CONFIG.publicSecret) + '"</code><br><br>' +
-                'Paste the resulting signature hex below.';
+                'Enter the encryption password you set when subscribing to decrypt your connection details.';
             document.getElementById('offline-nft-info').classList.remove('hidden');
         } catch (err) {
             console.error('NFT lookup error:', err);
@@ -1461,10 +1438,10 @@
     var btnDecryptOffline = document.getElementById('btn-decrypt-offline');
     if (btnDecryptOffline) btnDecryptOffline.addEventListener('click', async function () {
         var statusEl = document.getElementById('decrypt-offline-status');
-        var sigInput = document.getElementById('offline-signature').value.trim().replace(/^0x/, '');
+        var offlinePw = document.getElementById('offline-password') ? document.getElementById('offline-password').value : '';
 
-        if (!sigInput) {
-            showStatus('decrypt-offline-status', 'Please paste your signature (hex)', 'error');
+        if (!offlinePw) {
+            showStatus('decrypt-offline-status', 'Please enter your encryption password', 'error');
             return;
         }
         if (!window._offlineNftData) {
@@ -1475,8 +1452,9 @@
         try {
             showStatus('decrypt-offline-status', '<span class="spinner"></span>Decrypting...', 'info');
             await ensureShake256();
-            var sigBytes = hexToBytes(sigInput);
-            var keyBytes = deriveSymmetricKey(sigBytes);
+            var combined = CONFIG.publicSecret + offlinePw;
+            var combinedBytes = new TextEncoder().encode(combined);
+            var keyBytes = deriveSymmetricKey(combinedBytes);
             var decrypted = await decryptAesGcm(keyBytes, window._offlineNftData.userEncrypted);
 
             document.getElementById('offline-connection-info').textContent = decrypted;
@@ -1484,7 +1462,7 @@
             statusEl.innerHTML = '';
         } catch (err) {
             console.error('Decrypt error:', err);
-            showStatus('decrypt-offline-status', 'Decryption failed. Make sure you signed the correct message with the correct key.', 'error');
+            showStatus('decrypt-offline-status', 'Decryption failed. Wrong password or corrupted data.', 'error');
         }
     });
 
