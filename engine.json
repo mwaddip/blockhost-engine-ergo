@@ -12,6 +12,25 @@
   "config_keys": {
     "session_key": "blockchain"
   },
+  "validation": {
+    "web3_required_keys": [
+      "blockchain.network",
+      "blockchain.node_url",
+      "blockchain.explorer_url",
+      "blockchain.nft_contract",
+      "blockchain.subscription_ergo_tree",
+      "blockchain.server_public_key"
+    ],
+    "env_required_vars": [
+      "ERGO_NODE_URL",
+      "ERGO_EXPLORER_URL",
+      "DEPLOYER_KEY_FILE",
+      "SUBSCRIPTION_ERGO_TREE"
+    ],
+    "env_rpc_var": "ERGO_NODE_URL",
+    "contract_pattern": "^[0-9a-fA-F]+$",
+    "signup_markers": ["ergo", "nautilus"]
+  },
   "constraints": {
     "address_pattern": "^(9|3)[1-9A-HJ-NP-Za-km-z]{50,}$",
     "native_token": "erg",
