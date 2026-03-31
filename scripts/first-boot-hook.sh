@@ -25,10 +25,10 @@ if command -v ergo-relay >/dev/null 2>&1; then
     }
     sleep 1  # Give relay a moment to bind port
   fi
-  # Run peer discovery — retries internally until peers are found or gives up
+  # Run peer discovery in the background — retries until peers are found
   if command -v ergo-peers >/dev/null 2>&1; then
-    log "Running peer discovery..."
-    ergo-peers >> "$LOG_FILE" 2>&1 || log "WARNING: Peer discovery failed — P2P broadcast may not work"
+    log "Starting peer discovery (background)..."
+    ergo-peers >> "$LOG_FILE" 2>&1 &
   fi
 fi
 
