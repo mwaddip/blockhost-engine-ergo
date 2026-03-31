@@ -257,7 +257,10 @@ class ErgoProviderImpl implements ErgoProvider {
       typeof value === "bigint" ? value.toString() : value,
     );
 
-    // Build list of submission endpoints to try in order
+    // Build list of submission endpoints to try in order.
+    // Explorer is tried first because it validates the tx server-side and
+    // returns a proper 400 if invalid. The P2P relay only confirms delivery
+    // to a peer — the peer may silently drop an invalid tx.
     const endpoints: string[] = [];
 
     // 1. Configured submit_url (if set — e.g. a known reliable node)
@@ -265,11 +268,11 @@ class ErgoProviderImpl implements ErgoProvider {
       endpoints.push(`${this.submitUrl}/transactions`);
     }
 
-    // 2. ergo-relay P2P broadcast (if signer has /transactions endpoint)
-    endpoints.push(`${this.signerUrl}/transactions`);
-
-    // 3. Explorer mempool relay
+    // 2. Explorer mempool relay (validates tx before accepting)
     endpoints.push(`${this.explorerUrl}/api/v1/mempool/transactions/submit`);
+
+    // 3. ergo-relay P2P broadcast (fallback — no validation feedback)
+    endpoints.push(`${this.signerUrl}/transactions`);
 
     // 4. Local Ergo node (if running)
     endpoints.push("http://127.0.0.1:9053/transactions");
@@ -277,24 +280,32 @@ class ErgoProviderImpl implements ErgoProvider {
 
     for (const url of endpoints) {
       try {
+        console.error(`[submitTx] Trying ${url}...`);
         const res = await fetch(url, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: txJson,
-          signal: AbortSignal.timeout(15_000),
+          signal: AbortSignal.timeout(60_000),
         });
+        const text = await res.text().catch(() => "");
+        console.error(`[submitTx] ${url} → ${res.status}: ${text.slice(0, 200)}`);
         if (res.ok) {
-          const data = await res.json() as { id: string } | string;
-          return typeof data === "string" ? data : data.id;
+          try {
+            const data = JSON.parse(text) as { id: string } | string;
+            return typeof data === "string" ? data : data.id;
+          } catch {
+            return text.trim().replace(/^"|"$/g, "");
+          }
         }
         // 400 = tx rejected (bad tx, not a connectivity issue)
         if (res.status === 400) {
-          const text = await res.text().catch(() => "");
           throw new Error(`Transaction rejected: ${text}`);
         }
         // Other errors (403, 500, etc) — try next endpoint
       } catch (err) {
         if (err instanceof Error && err.message.startsWith("Transaction rejected")) throw err;
+        const detail = err instanceof Error ? err.message : String(err);
+        console.error(`[submitTx] ${url} → error: ${detail}`);
         // Timeout or network error — try next
       }
     }

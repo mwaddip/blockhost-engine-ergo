@@ -106,7 +106,7 @@ def validate_signature(sig: str) -> bool:
 def _wait_for_tx_confirmation(
     tx_id: str,
     blockchain: dict,
-    timeout: int = 300,
+    timeout: int = 600,
     poll_interval: int = 10,
 ) -> tuple[bool, Optional[str]]:
     """Poll the explorer until a transaction is confirmed (has numConfirmations >= 1).
@@ -812,7 +812,7 @@ def finalize_contracts(config: dict) -> tuple[bool, Optional[str]]:
             [str(deploy_script)],
             capture_output=True,
             text=True,
-            timeout=300,  # 5 min -- Ergo tx confirmation is ~2 min
+            timeout=600,  # 10 min -- testnet confirmation can be slow
             env=env,
         )
 
@@ -1122,7 +1122,7 @@ def finalize_mint_nft(config: dict) -> tuple[bool, Optional[str]]:
             cmd,
             capture_output=True,
             text=True,
-            timeout=300,  # 5 min -- Ergo tx confirmation ~2 min
+            timeout=600,  # 10 min -- testnet confirmation can be slow
         )
 
         if result.returncode != 0:
@@ -1201,7 +1201,7 @@ def finalize_plan(config: dict) -> tuple[bool, Optional[str]]:
             cmd,
             capture_output=True,
             text=True,
-            timeout=300,  # 5 min -- Ergo tx confirmation
+            timeout=600,  # 10 min -- testnet confirmation can be slow
             env=env,
         )
 
