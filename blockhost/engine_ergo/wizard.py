@@ -1047,6 +1047,10 @@ def finalize_chain_config(config: dict) -> tuple[bool, Optional[str]]:
                 )
             )
 
+        # Provide nginx extra locations for the installer's nginx step.
+        # This proxies the Ergo Explorer API so the signup page avoids CORS.
+        config["_nginx_extra_locations"] = get_nginx_extra_locations(config)
+
         config["_step_result_chain_config"] = {
             "message": "Configuration files written"
         }

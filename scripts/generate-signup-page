@@ -210,7 +210,7 @@ def generate_page(config: dict, template: str) -> str:
         '{{SERVER_PUBLIC_KEY}}':       server_public_key,
         '{{PUBLIC_SECRET}}':           config.get('public_secret', 'blockhost-access'),
         '{{NODE_URL}}':                bc.get('node_url', '/api/v0'),
-        '{{EXPLORER_URL}}':            bc.get('explorer_url', '/explorer/api/v1'),
+        '{{EXPLORER_URL}}':            '/api/v1',  # Proxied via nginx, not direct
         '{{SUBSCRIPTION_ERGO_TREE}}':  bc.get('subscription_ergo_tree', ''),
         '{{SERVER_ADDRESS}}':          server_address,
         '{{DEPLOYER_ADDRESS}}':        deployer_address,
