@@ -1097,6 +1097,17 @@
                 subscriptionBoxValue = F.SAFE_MIN_BOX_VALUE;
             }
 
+            // Ergo's min-box-value rule rejects outputs too small for their
+            // serialized size (roughly 360 nanoERG/byte). SAFE_MIN_BOX_VALUE
+            // is a safe floor for any subscription box layout we produce.
+            if (subscriptionBoxValue < F.SAFE_MIN_BOX_VALUE) {
+                throw new Error(
+                    'Subscription total is ' + subscriptionBoxValue + ' nanoERG but ' +
+                    'the minimum box value is ' + F.SAFE_MIN_BOX_VALUE + ' nanoERG. ' +
+                    'Choose more days or a higher-priced plan.'
+                );
+            }
+
             // C.5  Encode subscription registers using Fleet SDK serializer
             //   R4: (Int, Coll[Byte])        — (planId, subscriberErgoTree)
             //   R5: (Long, (Long, Int))       — (amountRemaining, (ratePerInterval, intervalBlocks))
@@ -1176,7 +1187,9 @@
 
         } catch (err) {
             console.error('subscribe error:', err);
-            showStatus('subscribe-status', escapeHtml(err.message || 'Subscription failed'), 'error');
+            // Nautilus submit_tx rejections are shaped {code, info} (no .message).
+            var msg = (err && (err.info || err.message)) || 'Subscription failed';
+            showStatus('subscribe-status', escapeHtml(msg), 'error');
             updateStep(3, 'error');
             btn.disabled = false;
             btn.textContent = 'Subscribe';
