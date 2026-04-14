@@ -42,6 +42,11 @@ ENGINE_JS_LOCATIONS = [
     Path('/usr/share/blockhost/signup-engine.js'),      # installed
 ]
 
+FLEET_JS_LOCATIONS = [
+    SCRIPT_DIR / 'fleet-sdk.browser.js',                   # development (repo)
+    Path('/usr/share/blockhost/fleet-sdk.browser.js'),      # installed
+]
+
 ENGINE_JSON_LOCATIONS = [
     SCRIPT_DIR.parent / 'engine.json',                 # development (repo root)
     Path('/usr/share/blockhost/engine.json'),           # installed
@@ -319,16 +324,21 @@ def main():
     with open(output_path, 'w') as f:
         f.write(html)
 
-    # Copy signup-engine.js next to the output HTML
-    engine_js = _find_file(ENGINE_JS_LOCATIONS)
-    if engine_js.exists():
-        dest = output_path.parent / 'signup-engine.js'
-        if dest.resolve() != engine_js.resolve():
-            shutil.copy2(engine_js, dest)
-            print(f'Copied:    {dest}')
-    else:
-        print(f'Warning: signup-engine.js not found -- page will not function',
-              file=sys.stderr)
+    # Copy signup-engine.js and fleet-sdk.browser.js next to the output HTML.
+    # Both are referenced by relative <script src> tags in signup-template.html.
+    for label, locations in (
+        ('signup-engine.js', ENGINE_JS_LOCATIONS),
+        ('fleet-sdk.browser.js', FLEET_JS_LOCATIONS),
+    ):
+        src = _find_file(locations)
+        if src.exists():
+            dest = output_path.parent / label
+            if dest.resolve() != src.resolve():
+                shutil.copy2(src, dest)
+                print(f'Copied:    {dest}')
+        else:
+            print(f'Warning: {label} not found -- page will not function',
+                  file=sys.stderr)
 
     bc = config.get('blockchain', {})
     print(f'Generated: {output_path}')

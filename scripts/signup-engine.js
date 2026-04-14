@@ -1193,19 +1193,27 @@
     };
 
     // ── NFT loading (wallet mode) ───────────────────────────────────────
-    //
-    // On Ergo, access NFTs are standard tokens minted during subscription creation.
-    // The server mints an NFT and stores connection info encrypted in a reference box.
-    // The user holds the NFT; the reference box is at the server's address.
 
     var userNfts = [];
     var selectedNft = null;
 
-    /**
-     * Load access NFTs held by the connected wallet.
-     * Queries the explorer for tokens matching the NFT token prefix or
-     * known NFT identifiers associated with this BlockHost instance.
-     */
+    // An access NFT belongs to THIS instance if the minting transaction's
+    // first input came from CONFIG.serverAddress. mint_nft.ts funds mints
+    // exclusively from the server's UTXOs (src/nft/mint.ts getUnspentBoxes),
+    // so this is the canonical on-chain binding between NFT and instance.
+    async function verifyMintedByThisInstance(tokenInfo) {
+        if (!tokenInfo || !tokenInfo.boxId) return false;
+        try {
+            var issuanceBox = await explorerFetch('/boxes/' + tokenInfo.boxId);
+            if (!issuanceBox || !issuanceBox.transactionId) return false;
+            var mintTx = await explorerFetch('/transactions/' + issuanceBox.transactionId);
+            if (!mintTx || !mintTx.inputs || mintTx.inputs.length === 0) return false;
+            return mintTx.inputs[0].address === CONFIG.serverAddress;
+        } catch (err) {
+            return false;
+        }
+    }
+
     async function loadUserNfts() {
         if (!connectedAddress || !ergoCtx) return;
 
@@ -1217,7 +1225,10 @@
         document.getElementById('connection-result').classList.add('hidden');
 
         try {
-            // Get wallet's token balance via explorer
+            if (!CONFIG.serverAddress) {
+                throw new Error('Server address not configured — cannot filter access NFTs by instance');
+            }
+
             var balance = await explorerFetch('/addresses/' + connectedAddress + '/balance/confirmed');
             if (!balance) {
                 document.getElementById('servers-loading').classList.add('hidden');
@@ -1225,41 +1236,25 @@
                 return;
             }
 
-            var tokens = balance.tokens || [];
-            userNfts = [];
+            var candidates = (balance.tokens || []).filter(function (t) {
+                return t.amount === 1 || t.amount === '1';
+            });
 
-            // Look for tokens that match our NFT pattern
-            // Access NFTs are tokens with amount=1 minted by the subscription handler
-            for (var i = 0; i < tokens.length; i++) {
-                var token = tokens[i];
-                if (token.amount === 1 || token.amount === '1') {
-                    // Potential access NFT; look up its metadata
-                    try {
-                        var tokenInfo = await explorerFetch('/tokens/' + token.tokenId);
-                        if (tokenInfo && tokenInfo.name && tokenInfo.name.indexOf('BlockHost') !== -1) {
-                            userNfts.push({
-                                tokenId: token.tokenId,
-                                name: tokenInfo.name || ('Server ' + token.tokenId.slice(0, 8)),
-                            });
-                        }
-                    } catch (tokenErr) {
-                        // Not an access NFT, skip
-                    }
-                }
-            }
+            var tokenInfos = await Promise.all(candidates.map(function (t) {
+                return explorerFetch('/tokens/' + t.tokenId).catch(function () { return null; });
+            }));
 
-            // If no explicitly named NFTs found, show all single-quantity tokens
-            // as potential access NFTs (the user can try decrypting)
-            if (userNfts.length === 0) {
-                for (var i = 0; i < tokens.length; i++) {
-                    if (tokens[i].amount === 1 || tokens[i].amount === '1') {
-                        userNfts.push({
-                            tokenId: tokens[i].tokenId,
-                            name: tokens[i].name || ('Token ' + tokens[i].tokenId.slice(0, 8)),
-                        });
-                    }
+            var verified = await Promise.all(candidates.map(function (t, i) {
+                var info = tokenInfos[i];
+                if (!info || !info.name || info.name.indexOf('BlockHost Access') === -1) {
+                    return Promise.resolve(null);
                 }
-            }
+                return verifyMintedByThisInstance(info).then(function (ok) {
+                    return ok ? { tokenId: t.tokenId, name: info.name } : null;
+                });
+            }));
+
+            userNfts = verified.filter(function (v) { return v !== null; });
 
             document.getElementById('servers-loading').classList.add('hidden');
 
