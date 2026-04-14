@@ -16,8 +16,7 @@ import * as fs from "fs";
 import { createProvider } from "../ergo/provider.js";
 import type { ErgoProvider } from "../ergo/provider.js";
 import { loadNetworkConfig } from "../fund-manager/web3-config.js";
-import { getSubscriptionErgoTree } from "../ergo/contracts.js";
-import { publicKeyFromAddress, addressFromPrivateKey } from "../ergo/address.js";
+import { addressFromPrivateKey } from "../ergo/address.js";
 import { loadServerPrivateKey } from "../crypto.js";
 import { SubscriptionScanner, type ScanDiff, type TrackedSubscription } from "./scanner.js";
 import {
@@ -268,24 +267,32 @@ async function main(): Promise<void> {
   const provider = createProvider(config.explorerUrl, config.signerUrl);
   const mainnet = config.network === "mainnet";
 
-  // Load server identity
-  let serverPubKeyHex: string;
+  // Load server identity (ECIES key — used by handlers for decryption, not for
+  // ErgoTree derivation. server.key and deployer.key are distinct in this engine.)
   try {
     const privKeyHex = loadServerPrivateKey();
     const serverAddress = addressFromPrivateKey(privKeyHex, mainnet);
-    serverPubKeyHex = publicKeyFromAddress(serverAddress);
-    console.log(`Server address:   ${serverAddress}`);
+    console.log(`Server ECIES addr: ${serverAddress}`);
   } catch (err) {
     console.error(`[MONITOR] Fatal: could not load server key: ${err}`);
     process.exit(1);
   }
 
-  // Get subscription ErgoTree (compile or use cached)
+  // Subscription ErgoTree comes from web3-defaults.yaml — written there by
+  // deploy-contracts and therefore authoritative. Deriving it from a key here
+  // would be fragile (and historically wrong: the monitor used server.key,
+  // which is the ECIES key, not the contract's deployer pubkey).
   let subscriptionErgoTree: string;
-  // Derive subscription ErgoTree from embedded template + server PK
-  // No node or JRE needed — pure constant substitution
-  subscriptionErgoTree = getSubscriptionErgoTree(serverPubKeyHex);
-  console.log(`Subscription tree: ${subscriptionErgoTree.slice(0, 40)}... (from template)`);
+  if (config.subscriptionErgoTree) {
+    subscriptionErgoTree = config.subscriptionErgoTree;
+    console.log(`Subscription tree: ${subscriptionErgoTree.slice(0, 40)}... (from config)`);
+  } else {
+    console.error(
+      "[MONITOR] Fatal: blockchain.subscription_ergo_tree missing from " +
+      "web3-defaults.yaml. Run deploy-contracts to populate it.",
+    );
+    process.exit(1);
+  }
 
   // Create scanner
   const scanner = new SubscriptionScanner(provider, subscriptionErgoTree, testingMode);
