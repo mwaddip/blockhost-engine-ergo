@@ -4,11 +4,11 @@
  * Adapts the Cardano handler pipeline for Ergo's beacon-based detection model.
  * Input is TrackedSubscription (from the subscription scanner), not a contract event.
  *
- * Pipeline for new subscriptions (8 steps):
+ * Pipeline for new subscriptions:
  *   1. Decrypt userEncrypted from registers (ECIES with server key)
- *   2. Reserve token ID (local counter)
- *   3. Call provisioner: blockhost-vm-create with --owner-wallet and --expiry-days
- *   4. Parse JSON summary from provisioner stdout
+ *   2. Call provisioner: blockhost-vm-create with --owner-wallet and --expiry-days
+ *   3. Parse JSON summary from provisioner stdout
+ *   4. Resolve subscriber-facing host via network_hook.get_connection_endpoint()
  *   5. Encrypt connection details (SHAKE256 symmetric)
  *   6. Call: blockhost-mint-nft with --owner-wallet and --user-encrypted
  *   7. Call provisioner: blockhost-vm-update-gecos with VM name, wallet, NFT ID
@@ -22,11 +22,14 @@ import * as fs from "node:fs";
 import type { TrackedSubscription } from "../monitor/scanner.js";
 import { eciesDecrypt, symmetricEncrypt, loadServerPrivateKey } from "../crypto.js";
 import { getCommand } from "../provisioner.js";
-import { STATE_DIR, VMS_JSON_PATH, PYTHON_TIMEOUT_MS } from "../paths.js";
+import { CONFIG_DIR, STATE_DIR, VMS_JSON_PATH, PYTHON_TIMEOUT_MS } from "../paths.js";
 
 // -- Constants ---------------------------------------------------------------
 const SSH_PORT = 22;
 const NEXT_VM_ID_FILE = `${STATE_DIR}/next-vm-id`;
+const NETWORK_MODE_PATH = `${CONFIG_DIR}/network-mode`;
+// Onion mode can call root-agent (tor-hidden-service-add) which may reload tor.
+const NETWORK_HOOK_TIMEOUT_MS = 30_000;
 
 // -- VM ID counter -----------------------------------------------------------
 
@@ -171,6 +174,57 @@ function runCommand(
   });
 }
 
+// -- Network hook (network-mode-agnostic endpoint resolution) ----------------
+
+function readNetworkMode(): string {
+  try {
+    const mode = fs.readFileSync(NETWORK_MODE_PATH, "utf8").trim();
+    return mode || "broker";
+  } catch {
+    return "broker";
+  }
+}
+
+/**
+ * Ask blockhost.network_hook for the subscriber-facing host for this VM.
+ * Return value depends on mode:
+ *   broker -> IPv6 from broker-allocation.json
+ *   manual -> static IP from config
+ *   onion  -> .onion address (creates hidden service and pushes into VM)
+ */
+function getConnectionEndpoint(vmName: string, bridgeIp: string, mode: string): string {
+  const script =
+    "import sys\n" +
+    "from blockhost.network_hook import get_connection_endpoint\n" +
+    "print(get_connection_endpoint(sys.argv[1], sys.argv[2], sys.argv[3]))\n";
+  const result = spawnSync("python3", ["-c", script, vmName, bridgeIp, mode], {
+    cwd: STATE_DIR,
+    timeout: NETWORK_HOOK_TIMEOUT_MS,
+    encoding: "utf8",
+  });
+  if (result.status !== 0) {
+    const err = (result.stderr || result.stdout || "").trim();
+    throw new Error(`network_hook.get_connection_endpoint failed: ${err || `exit ${String(result.status)}`}`);
+  }
+  return result.stdout.trim();
+}
+
+function networkHookCleanup(vmName: string, mode: string): void {
+  const script =
+    "import sys\n" +
+    "from blockhost.network_hook import cleanup\n" +
+    "cleanup(sys.argv[1], sys.argv[2])\n";
+  const result = spawnSync("python3", ["-c", script, vmName, mode], {
+    cwd: STATE_DIR,
+    timeout: NETWORK_HOOK_TIMEOUT_MS,
+    encoding: "utf8",
+  });
+  if (result.status !== 0) {
+    const err = (result.stderr || result.stdout || "").trim();
+    console.warn(`[WARN] network_hook.cleanup failed for ${vmName}: ${err || `exit ${String(result.status)}`}`);
+  }
+}
+
 // -- Output parsers ----------------------------------------------------------
 
 /** Summary JSON emitted by blockhost-vm-create (last JSON line in stdout) */
@@ -178,7 +232,6 @@ interface VmCreateSummary {
   status: string;
   vm_name: string;
   ip: string;
-  ipv6?: string;
   vmid: number;
   username: string;
 }
@@ -252,8 +305,8 @@ async function destroyVm(vmName: string): Promise<{ success: boolean; output: st
  * Handle a newly-detected subscription box.
  *
  * Allocates a VM ID from the local counter, then runs the full 8-step
- * provisioning pipeline: decrypt -> create VM -> parse summary -> encrypt
- * connection details -> mint NFT -> parse token ID -> update GECOS -> mark minted.
+ * provisioning pipeline: decrypt -> create VM -> parse summary -> resolve
+ * connection endpoint -> encrypt details -> mint NFT -> update GECOS -> mark minted.
  */
 export async function handleSubscriptionCreated(sub: TrackedSubscription): Promise<void> {
   const { state, beaconTokenId, boxId } = sub;
@@ -261,6 +314,8 @@ export async function handleSubscriptionCreated(sub: TrackedSubscription): Promi
   const vmId = allocateVmId();
   const vmName = formatVmName(vmId);
   const expiryDays = calculateExpiryDays(state.expiryHeight, state.creationHeight);
+
+  const networkMode = readNetworkMode();
 
   console.log("\n========== SUBSCRIPTION CREATED ==========");
   console.log(`Beacon:      ${beaconTokenId.slice(0, 16)}...`);
@@ -270,6 +325,7 @@ export async function handleSubscriptionCreated(sub: TrackedSubscription): Promi
   console.log(`Expiry height: ${state.expiryHeight}`);
   console.log(`Amount:      ${state.amountRemaining} (rate: ${state.ratePerInterval}/${state.intervalBlocks} blocks)`);
   console.log(`User enc:    ${state.userEncrypted.length > 10 ? state.userEncrypted.slice(0, 10) + "..." : state.userEncrypted}`);
+  console.log(`Network mode: ${networkMode}`);
   console.log("------------------------------------------");
   console.log(`Provisioning VM: ${vmName} (${expiryDays} days)`);
 
@@ -285,9 +341,7 @@ export async function handleSubscriptionCreated(sub: TrackedSubscription): Promi
     }
   }
 
-  // Step 2: Reserve token ID (handled by mint script, but we track the VM ID here)
-
-  // Step 3: Create VM
+  // Step 2: Create VM
   const createArgs = [
     vmName,
     "--owner-wallet", state.subscriber,
@@ -322,7 +376,7 @@ export async function handleSubscriptionCreated(sub: TrackedSubscription): Promi
     // Non-fatal -- scanner will re-detect but provisioner will skip existing VM
   }
 
-  // Step 4: Parse JSON summary from provisioner stdout
+  // Step 3: Parse JSON summary from provisioner stdout
   const summary = parseVmSummary(createResult.stdout);
   if (!summary) {
     console.log("[INFO] No JSON summary from provisioner");
@@ -333,24 +387,23 @@ export async function handleSubscriptionCreated(sub: TrackedSubscription): Promi
 
   console.log(`[INFO] VM summary: ip=${summary.ip}, vmid=${summary.vmid}`);
 
-  // Read IPv6 from vms.json (provisioner writes it there, not always in stdout)
-  let vmIpv6 = summary.ipv6 ?? "";
-  if (!vmIpv6) {
-    try {
-      const dbPath = VMS_JSON_PATH;
-      if (fs.existsSync(dbPath)) {
-        const db = JSON.parse(fs.readFileSync(dbPath, "utf8")) as Record<string, Record<string, Record<string, unknown>>>;
-        vmIpv6 = (db["vms"]?.[vmName]?.["ipv6_address"] as string | undefined) ?? "";
-      }
-    } catch { /* non-fatal */ }
+  // Step 4: Resolve subscriber-facing host via network hook
+  // (broker -> IPv6 allocation, manual -> static IP, onion -> creates .onion)
+  let connectionHost: string;
+  try {
+    connectionHost = getConnectionEndpoint(vmName, summary.ip, networkMode);
+    console.log(`[OK] Connection endpoint (${networkMode}): ${connectionHost}`);
+  } catch (err) {
+    console.error(`[ERROR] ${err instanceof Error ? err.message : String(err)}`);
+    console.warn(`[WARN] Falling back to bridge IP ${summary.ip} for connection details`);
+    connectionHost = summary.ip;
   }
 
   // Step 5: Encrypt connection details with user signature
   let userEncryptedOut = "";
 
   if (userSignature) {
-    const hostname = vmIpv6 || summary.ip;
-    const encrypted = encryptConnectionDetails(userSignature, hostname, summary.username);
+    const encrypted = encryptConnectionDetails(userSignature, connectionHost, summary.username);
     if (encrypted) {
       userEncryptedOut = encrypted;
       console.log("[OK] Connection details encrypted");
@@ -575,6 +628,10 @@ else:
   } else {
     console.error(`[ERROR] Failed to destroy VM ${vmName}: ${output}`);
   }
+
+  // Release network resources (onion hidden service, etc.) regardless of
+  // destroy success -- cleanup is safe to run even if the VM is already gone.
+  networkHookCleanup(vmName, readNetworkMode());
 
   console.log("==========================================\n");
 }
