@@ -981,6 +981,20 @@ def finalize_chain_config(config: dict) -> tuple[bool, Optional[str]]:
             "max_command_age": 300,
         }
 
+        # admin.shared_key — symmetric HMAC key for admin commands.
+        # Derived from admin_signature (= hex(utf8(public_secret + password)))
+        # via the same SHAKE256(seed, 32) used by symmetricEncrypt() to lock
+        # the NFT userEncrypt blob. Operator and admin are the same person:
+        # the password they chose at the wizard wallet step both decrypts
+        # the NFT connection data and authenticates command HMACs.
+        admin_signature_hex = config.get("admin_signature", "")
+        if admin_signature_hex:
+            try:
+                sig_bytes = bytes.fromhex(admin_signature_hex.removeprefix("0x"))
+                bh_config["admin"]["shared_key"] = hashlib.shake_256(sig_bytes).hexdigest(32)
+            except ValueError:
+                pass  # malformed admin_signature — admin commands stay disabled
+
         admin_commands = config.get("admin_commands", {})
         if admin_commands.get("enabled"):
             bh_config["admin"]["destination_mode"] = admin_commands.get(
