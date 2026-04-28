@@ -20,10 +20,9 @@ import {
   decode,
 } from "@fleet-sdk/serializer";
 import { hex } from "@fleet-sdk/crypto";
-import * as fs from "fs";
 import type { SubscriptionState } from "./types.js";
 import { ergoTreeFromAddress } from "./address.js";
-import { TESTING_MODE_FILE } from "../paths.js";
+import { isTestnet } from "../paths.js";
 import { ErgoAddress, Network } from "@fleet-sdk/core";
 
 // ---------------------------------------------------------------------------
@@ -124,8 +123,7 @@ export function decodeSubscriptionRegisters(
       // Convert ErgoTree bytes back to address, respecting .testing-mode
       const ergoTree = hex.encode(r4[1]);
       try {
-        const isTestnet = fs.existsSync(TESTING_MODE_FILE);
-        const network = isTestnet ? Network.Testnet : Network.Mainnet;
+        const network = isTestnet() ? Network.Testnet : Network.Mainnet;
         const addr = ErgoAddress.fromErgoTree(ergoTree, network);
         result.subscriber = addr.encode(network);
       } catch {

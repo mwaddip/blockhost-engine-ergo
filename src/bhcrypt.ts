@@ -19,7 +19,7 @@
 
 import { eciesDecrypt, eciesEncrypt, symmetricEncrypt, symmetricDecrypt } from "./crypto.js";
 import { addressFromPrivateKey } from "./ergo/address.js";
-import { TESTING_MODE_FILE } from "./paths.js";
+import { isTestnet } from "./paths.js";
 import { secp256k1 } from "@noble/curves/secp256k1";
 import { bytesToHex } from "@noble/hashes/utils";
 import * as fs from "node:fs";
@@ -29,8 +29,7 @@ import { HDKey } from "@scure/bip32";
 
 const ERGO_PATH = "m/44'/429'/0'/0/0"; // EIP-3
 
-/** Mainnet unless /etc/blockhost/.testing-mode exists */
-const IS_MAINNET = !fs.existsSync(TESTING_MODE_FILE);
+const IS_MAINNET = !isTestnet();
 
 function die(msg: string): never {
   process.stderr.write(`bhcrypt: ${msg}\n`);

@@ -17,7 +17,7 @@ import * as fs from "fs";
 import * as yaml from "js-yaml";
 import { ErgoAddress, Network } from "@fleet-sdk/core";
 import { getProviderClient } from "../cli-utils.js";
-import { BLOCKHOST_CONFIG_PATH } from "../../paths.js";
+import { BLOCKHOST_CONFIG_PATH, isTestnet } from "../../paths.js";
 
 // -- Admin NFT ID loader ----------------------------------------------------
 
@@ -102,8 +102,7 @@ export async function whoCommand(args: string[]): Promise<void> {
     }
 
     // Derive the holder address from the box's ErgoTree
-    const isTestnet = (await import("fs")).existsSync("/etc/blockhost/.testing-mode");
-    const network = isTestnet ? Network.Testnet : Network.Mainnet;
+    const network = isTestnet() ? Network.Testnet : Network.Mainnet;
     const addr = ErgoAddress.fromErgoTree(box.ergoTree, network);
     const holderAddress = addr.encode(network);
 

@@ -10,10 +10,9 @@
  * address is derived from the box's ErgoTree.
  */
 
-import * as fs from "fs";
 import type { ErgoProvider } from "../ergo/provider.js";
 import { ErgoAddress, Network } from "@fleet-sdk/core";
-import { TESTING_MODE_FILE } from "../paths.js";
+import { isTestnet } from "../paths.js";
 
 // ---------------------------------------------------------------------------
 // NFT holder lookup
@@ -62,8 +61,7 @@ export async function findNftHolder(
     if (!box) return null;
 
     // Derive address from ErgoTree, respecting network from .testing-mode
-    const isTestnet = fs.existsSync(TESTING_MODE_FILE);
-    const network = isTestnet ? Network.Testnet : Network.Mainnet;
+    const network = isTestnet() ? Network.Testnet : Network.Mainnet;
     try {
       const addr = ErgoAddress.fromErgoTree(box.ergoTree, network);
       return addr.encode(network);
