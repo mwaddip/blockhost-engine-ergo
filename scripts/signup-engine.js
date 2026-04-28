@@ -544,6 +544,15 @@
         return sigmaDecodeInt(hex);
     }
 
+    /**
+     * Decode plan box register R7 (Int = collection interval in blocks).
+     * @param {string} hex
+     * @returns {number}
+     */
+    function decodeIntervalBlocks(hex) {
+        return sigmaDecodeInt(hex);
+    }
+
     // ── Ergo address helpers ──────────────────────────────────────────────
     //
     // Ergo uses a custom Base58 address encoding.
@@ -766,7 +775,7 @@
 
     /**
      * Plan record.
-     * @typedef {{ planId: number, name: string, pricePerDay: bigint, paymentAsset: string }} Plan
+     * @typedef {{ planId: number, name: string, pricePerDay: bigint, intervalBlocks: number, paymentAsset: string }} Plan
      */
 
     /** @type {Plan[]} */
@@ -779,6 +788,7 @@
      *   R4: Coll[Byte] (UTF-8 plan name)
      *   R5: Long (price per day in nanoERG)
      *   R6: Int (plan ID)
+     *   R7: Int (collection interval in blocks; absent on legacy boxes → defaults to 720)
      *
      * @param {object} box - Box object from node/explorer API
      * @returns {Plan|null}
@@ -791,6 +801,7 @@
             var r4Hex = regs.R4 || regs.r4;
             var r5Hex = regs.R5 || regs.r5;
             var r6Hex = regs.R6 || regs.r6;
+            var r7Hex = regs.R7 || regs.r7;
 
             if (!r4Hex || !r5Hex || !r6Hex) return null;
 
@@ -798,10 +809,14 @@
             if (typeof r4Hex === 'object') r4Hex = r4Hex.serializedValue || r4Hex.renderedValue;
             if (typeof r5Hex === 'object') r5Hex = r5Hex.serializedValue || r5Hex.renderedValue;
             if (typeof r6Hex === 'object') r6Hex = r6Hex.serializedValue || r6Hex.renderedValue;
+            if (r7Hex && typeof r7Hex === 'object') r7Hex = r7Hex.serializedValue || r7Hex.renderedValue;
 
             var name = decodePlanName(r4Hex);
             var pricePerDay = decodePricePerDay(r5Hex);
             var planId = decodePlanId(r6Hex);
+            // Legacy plan boxes (no R7) fall back to 720 blocks (~1 day on Ergo mainnet).
+            var intervalBlocks = r7Hex ? decodeIntervalBlocks(r7Hex) : 720;
+            if (!Number.isInteger(intervalBlocks) || intervalBlocks <= 0) intervalBlocks = 720;
 
             if (!name || planId <= 0 || pricePerDay <= 0n) return null;
 
@@ -809,6 +824,7 @@
                 planId: planId,
                 name: name,
                 pricePerDay: pricePerDay,
+                intervalBlocks: intervalBlocks,
                 paymentAsset: '', // Empty = native ERG payment
             };
         } catch (e) {
@@ -1066,9 +1082,13 @@
             if (!F) throw new Error('Fleet SDK not loaded');
 
             // C.1  Compute subscription parameters (block-height based)
+            //
+            // intervalBlocks comes from the plan box (R7). One interval == "one day"
+            // in plan accounting. In production it's 720 blocks (~1 day). In testing
+            // mode the wizard publishes a smaller plan (e.g. 3 blocks) so subscription
+            // expiry and collection cadence both compress proportionally.
             var totalPayment = plan.pricePerDay * BigInt(days);
-            var blocksPerDay = 720;
-            var intervalBlocks = blocksPerDay; // 1 day in blocks (~2 min/block)
+            var intervalBlocks = plan.intervalBlocks;
             var ratePerInterval = plan.pricePerDay;
 
             // C.2  Get wallet UTXOs and current height
@@ -1083,7 +1103,7 @@
             }
 
             var lastCollectedHeight = height;
-            var expiryHeight = height + days * blocksPerDay;
+            var expiryHeight = height + days * intervalBlocks;
 
             // C.3  Parse payment asset from plan
             var paymentTokenId = plan.paymentAsset || '';
