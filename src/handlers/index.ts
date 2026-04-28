@@ -23,6 +23,7 @@ import type { TrackedSubscription } from "../monitor/scanner.js";
 import { eciesDecrypt, symmetricEncrypt, loadServerPrivateKey } from "../crypto.js";
 import { getCommand } from "../provisioner.js";
 import { getProviderClient } from "../bw/cli-utils.js";
+import { allocateCounter } from "../util/counter.js";
 import { CONFIG_DIR, STATE_DIR, PYTHON_TIMEOUT_MS } from "../paths.js";
 
 // -- Constants ---------------------------------------------------------------
@@ -31,58 +32,6 @@ const NEXT_VM_ID_FILE = `${STATE_DIR}/next-vm-id`;
 const NETWORK_MODE_PATH = `${CONFIG_DIR}/network-mode`;
 // Onion mode can call root-agent (tor-hidden-service-add) which may reload tor.
 const NETWORK_HOOK_TIMEOUT_MS = 30_000;
-
-// -- VM ID counter -----------------------------------------------------------
-
-/**
- * Read the next VM ID from disk, increment, and persist.
- * Starts at 1 if the file does not exist.
- */
-function allocateVmId(): number {
-  fs.mkdirSync(STATE_DIR, { recursive: true });
-  const lockPath = NEXT_VM_ID_FILE + ".lock";
-
-  let lockFd = -1;
-  for (let i = 0; i < 50; i++) {
-    try {
-      lockFd = fs.openSync(
-        lockPath,
-        fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY,
-      );
-      break;
-    } catch {
-      if (i === 49) {
-        try { fs.unlinkSync(lockPath); } catch { /* stale lock */ }
-        try {
-          lockFd = fs.openSync(
-            lockPath,
-            fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY,
-          );
-        } catch { /* give up */ }
-        break;
-      }
-      const deadline = Date.now() + 100;
-      while (Date.now() < deadline) { /* brief spin */ }
-    }
-  }
-
-  try {
-    let current = 1;
-    try {
-      const raw = fs.readFileSync(NEXT_VM_ID_FILE, "utf8").trim();
-      const parsed = parseInt(raw, 10);
-      if (!isNaN(parsed) && parsed > 0) current = parsed;
-    } catch {
-      // File does not exist -- start at 1
-    }
-
-    fs.writeFileSync(NEXT_VM_ID_FILE, String(current + 1), "utf8");
-    return current;
-  } finally {
-    if (lockFd >= 0) try { fs.closeSync(lockFd); } catch { /* ignore */ }
-    try { fs.unlinkSync(lockPath); } catch { /* ignore */ }
-  }
-}
 
 /**
  * Format a VM ID as a VM name: blockhost-001, blockhost-042, etc.
@@ -336,7 +285,7 @@ async function destroyVm(vmName: string): Promise<{ success: boolean; output: st
 export async function handleSubscriptionCreated(sub: TrackedSubscription): Promise<void> {
   const { state, beaconTokenId, boxId } = sub;
 
-  const vmId = allocateVmId();
+  const vmId = await allocateCounter(NEXT_VM_ID_FILE);
   const vmName = formatVmName(vmId);
   const currentHeight = await getProviderClient().getHeight();
   const expiryDays = calculateExpiryDays(state.expiryHeight, currentHeight);

@@ -15,78 +15,14 @@ import {
   SAFE_MIN_BOX_VALUE,
 } from "@fleet-sdk/core";
 import type { Box, Amount } from "@fleet-sdk/common";
-import * as fs from "fs";
 import type { Addressbook } from "../../fund-manager/types.js";
 import { getProviderClient } from "../cli-utils.js";
 import { loadPrivateKey } from "../key-utils.js";
 import { encodeString, encodeLong, encodeInt } from "../../ergo/registers.js";
+import { allocateCounter } from "../../util/counter.js";
 import { STATE_DIR } from "../../paths.js";
 
-// -- Auto-increment plan ID -------------------------------------------------
-
-function getNextPlanId(): number {
-  const counterPath = `${STATE_DIR}/next-plan-id`;
-  const lockPath = counterPath + ".lock";
-  fs.mkdirSync(STATE_DIR, { recursive: true });
-
-  let lockFd = -1;
-  for (let i = 0; i < 50; i++) {
-    try {
-      lockFd = fs.openSync(
-        lockPath,
-        fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY,
-      );
-      break;
-    } catch {
-      if (i === 49) {
-        try {
-          fs.unlinkSync(lockPath);
-        } catch {
-          /* ignore */
-        }
-        try {
-          lockFd = fs.openSync(
-            lockPath,
-            fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY,
-          );
-        } catch {
-          /* give up */
-        }
-        break;
-      }
-      const deadline = Date.now() + 100;
-      while (Date.now() < deadline) {
-        /* spin */
-      }
-    }
-  }
-
-  try {
-    let current = 1;
-    try {
-      const raw = fs.readFileSync(counterPath, "utf8").trim();
-      const parsed = parseInt(raw, 10);
-      if (!isNaN(parsed) && parsed > 0) current = parsed;
-    } catch {
-      /* file doesn't exist -- start at 1 */
-    }
-    fs.writeFileSync(counterPath, String(current + 1), "utf8");
-    return current;
-  } finally {
-    if (lockFd >= 0) {
-      try {
-        fs.closeSync(lockFd);
-      } catch {
-        /* ignore */
-      }
-    }
-    try {
-      fs.unlinkSync(lockPath);
-    } catch {
-      /* ignore */
-    }
-  }
-}
+const PLAN_ID_FILE = `${STATE_DIR}/next-plan-id`;
 
 // -- CLI handler ------------------------------------------------------------
 
@@ -143,7 +79,7 @@ async function planCreateCommand(
   const provider = getProviderClient();
 
   // Auto-increment plan ID
-  const planId = getNextPlanId();
+  const planId = await allocateCounter(PLAN_ID_FILE);
 
   // Encode registers
   // R4: plan name (Coll[Byte] UTF-8)

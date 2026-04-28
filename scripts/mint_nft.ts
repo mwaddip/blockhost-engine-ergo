@@ -30,6 +30,7 @@ import { isValidAddress, addressFromPrivateKey } from "../src/ergo/address.js";
 import { createProvider } from "../src/ergo/provider.js";
 import { loadNetworkConfig } from "../src/fund-manager/web3-config.js";
 import { mintNft } from "../src/nft/mint.js";
+import { allocateCounter } from "../src/util/counter.js";
 import { CONFIG_DIR, STATE_DIR } from "../src/paths.js";
 
 // -- Constants ---------------------------------------------------------------
@@ -115,59 +116,6 @@ function loadDeployerKey(): string {
   return raw;
 }
 
-// -- NFT ID counter ----------------------------------------------------------
-
-/**
- * Allocate the next sequential NFT ID (for naming, not for token ID).
- * On Ergo, the actual token ID is the first input box ID, but we keep
- * a counter for human-readable NFT naming ("BlockHost Access #NNN").
- */
-function allocateNftNumber(): number {
-  fs.mkdirSync(STATE_DIR, { recursive: true });
-  const lockPath = COUNTER_PATH + ".lock";
-
-  let lockFd = -1;
-  for (let i = 0; i < 50; i++) {
-    try {
-      lockFd = fs.openSync(
-        lockPath,
-        fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY,
-      );
-      break;
-    } catch {
-      if (i === 49) {
-        try { fs.unlinkSync(lockPath); } catch { /* stale lock */ }
-        try {
-          lockFd = fs.openSync(
-            lockPath,
-            fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY,
-          );
-        } catch { /* give up */ }
-        break;
-      }
-      const deadline = Date.now() + 100;
-      while (Date.now() < deadline) { /* brief spin */ }
-    }
-  }
-
-  try {
-    let current = 1;
-    try {
-      const raw = fs.readFileSync(COUNTER_PATH, "utf8").trim();
-      const parsed = parseInt(raw, 10);
-      if (!isNaN(parsed) && parsed > 0) current = parsed;
-    } catch {
-      // File does not exist -- start at 1
-    }
-
-    fs.writeFileSync(COUNTER_PATH, String(current + 1), { encoding: "utf8" });
-    return current;
-  } finally {
-    if (lockFd >= 0) try { fs.closeSync(lockFd); } catch { /* ignore */ }
-    try { fs.unlinkSync(lockPath); } catch { /* ignore */ }
-  }
-}
-
 // -- Main --------------------------------------------------------------------
 
 async function main(): Promise<void> {
@@ -193,7 +141,7 @@ async function main(): Promise<void> {
   process.stderr.write(`Current height: ${currentHeight}\n`);
 
   // Allocate sequential number for naming
-  const nftNumber = allocateNftNumber();
+  const nftNumber = await allocateCounter(COUNTER_PATH);
   const nftName = `BlockHost Access #${nftNumber.toString().padStart(3, "0")}`;
   const nftDescription = `BlockHost VM access credential #${nftNumber}`;
 
