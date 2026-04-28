@@ -1497,12 +1497,14 @@
     // ── Admin Commands ───────────────────────────────────────────────────
     //
     // Protocol: transaction output with R4 register data
-    // Payload: UTF-8("{nonce} {command}") + HMAC-SHA256(sharedKey, message)[:16]
-    // SharedKey: SHAKE256(signature of publicSecret)
+    // Payload: UTF-8("v1 {nonce} {block_height} {command}") + HMAC-SHA256(sharedKey, message)[:16]
+    // SharedKey: SHAKE256(utf8(publicSecret + password), 32)
     //
-    // The command is submitted as an Ergo transaction with an output box
-    // at the admin address containing the HMAC-authenticated command in R4.
-    // The server scans admin wallet transactions for R4 register data.
+    // The block_height carries the chain height observed when the command
+    // was issued; the engine accepts commands within max_command_age_blocks
+    // of its own current height. Same password the operator chose at install
+    // unlocks the NFT userEncrypt blob and authenticates command HMACs —
+    // operator and admin are the same person in this setup.
 
     var _adminNonce = (function () {
         var chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
@@ -1517,9 +1519,14 @@
         var btn = document.getElementById('btn-send-command');
         var statusEl = document.getElementById('command-status');
         var commandInput = document.getElementById('command-input').value.trim();
+        var adminPw = document.getElementById('admin-pw').value;
 
         if (!commandInput) {
             showStatus('command-status', 'Please enter a command', 'error');
+            return;
+        }
+        if (!adminPw) {
+            showStatus('command-status', 'Please enter your admin password', 'error');
             return;
         }
         if (!ergoCtx) {
@@ -1530,25 +1537,24 @@
         try {
             btn.disabled = true;
 
-            var message = _adminNonce + ' ' + commandInput;
+            // Fetch wallet state (need height for v1 wire format and tx building)
+            showStatus('command-status', '<span class="spinner"></span>Fetching chain state...', 'info');
+            var height = await ergoCtx.get_current_height();
+            var utxos = await ergoCtx.get_utxos();
+            var changeAddr = await ergoCtx.get_change_address();
 
-            // Sign publicSecret to derive shared key
-            showStatus('command-status', '<span class="spinner"></span>Sign the message in your wallet...', 'info');
-            var signResult = await ergoCtx.sign_data(connectedAddress, CONFIG.publicSecret);
-
-            var rawSig;
-            if (typeof signResult === 'string') {
-                rawSig = signResult;
-            } else if (signResult && signResult.signedMessage) {
-                rawSig = signResult.signedMessage;
-            } else if (signResult && signResult.proof) {
-                rawSig = signResult.proof;
-            } else {
-                rawSig = bytesToHex(new TextEncoder().encode(JSON.stringify(signResult)));
+            if (!utxos || utxos.length === 0) {
+                throw new Error('No UTXOs in wallet');
             }
 
+            // v1 wire format: "v1 {nonce} {block_height} {command}"
+            var message = 'v1 ' + _adminNonce + ' ' + height + ' ' + commandInput;
+
+            // Derive shared key from password (matches wizard's admin.shared_key)
             await ensureShake256();
-            var sharedKey = deriveSymmetricKey(hexToBytes(rawSig));
+            var combined = CONFIG.publicSecret + adminPw;
+            var combinedBytes = new TextEncoder().encode(combined);
+            var sharedKey = deriveSymmetricKey(combinedBytes);
 
             // Compute HMAC-SHA256(sharedKey, message)[:16]
             showStatus('command-status', '<span class="spinner"></span>Computing HMAC...', 'info');
@@ -1569,14 +1575,6 @@
 
             // Build and submit the admin command transaction
             showStatus('command-status', '<span class="spinner"></span>Building command transaction...', 'info');
-
-            var height = await ergoCtx.get_current_height();
-            var utxos = await ergoCtx.get_utxos();
-            var changeAddr = await ergoCtx.get_change_address();
-
-            if (!utxos || utxos.length === 0) {
-                throw new Error('No UTXOs in wallet');
-            }
 
             // Build command output box with payload in R4 using Fleet SDK
             var F = window.Fleet;
