@@ -7,8 +7,14 @@
  *   R4 register of the first output.
  *
  *   Wire format of R4 data: message_bytes + hmac_suffix(16 bytes)
- *   message = "{nonce} {command text}" (UTF-8)
- *   hmac_suffix = HMAC-SHA256(shared_key, message_bytes)[:16]
+ *     message = (UTF-8)
+ *       v1:  "v1 {nonce} {block_height} {command}"   ← preferred
+ *       v0:  "{nonce} {command}"                      ← legacy
+ *     hmac_suffix = HMAC-SHA256(shared_key, message_bytes)[:16]
+ *
+ *   v1 carries the chain height observed at command issue time so the
+ *   engine can apply block-based freshness per facts §5. The legacy v0
+ *   path falls back to numeric-nonce-as-timestamp freshness.
  *
  * Detection:
  *   1. Query recent transactions at admin address via explorer
@@ -28,7 +34,14 @@ import type {
   KnockActionConfig,
 } from "./types.js";
 import { loadCommandDatabase } from "./config.js";
-import { isNonceUsed, markNonceUsed, pruneOldNonces, loadNonces, validateTimestamp } from "./nonces.js";
+import {
+  isNonceUsed,
+  markNonceUsed,
+  pruneOldNonces,
+  loadNonces,
+  validateTimestamp,
+  validateBlockHeight,
+} from "./nonces.js";
 import { executeKnock, closeAllKnocks } from "./handlers/knock.js";
 import { hexToBytes } from "../crypto.js";
 
@@ -129,8 +142,27 @@ export function parseCommandPayload(
     return null; // HMAC mismatch — not an admin command
   }
 
-  // Parse message: "{nonce} {command}"
   const messageStr = new TextDecoder().decode(message);
+
+  // v1 wire format: "v1 {nonce} {block_height} {command}"
+  if (messageStr.startsWith("v1 ")) {
+    const rest = messageStr.slice(3);
+    const s1 = rest.indexOf(" ");
+    if (s1 < 1) return null;
+    const nonce = rest.slice(0, s1);
+    const tail = rest.slice(s1 + 1);
+    const s2 = tail.indexOf(" ");
+    if (s2 < 1) return null;
+    const heightToken = tail.slice(0, s2);
+    const command = tail.slice(s2 + 1).trim();
+    if (!/^\d+$/.test(heightToken)) return null;
+    const block_height = parseInt(heightToken, 10);
+    if (!Number.isInteger(block_height) || block_height <= 0) return null;
+    if (!nonce || !command) return null;
+    return { command, nonce, block_height };
+  }
+
+  // v0 (legacy) wire format: "{nonce} {command}"
   const spaceIdx = messageStr.indexOf(" ");
   if (spaceIdx < 1) return null;
 
@@ -145,21 +177,41 @@ export function parseCommandPayload(
 // -- Validation & Dispatch ----------------------------------------------------
 
 /**
- * Validate command nonce (anti-replay) and timestamp
+ * Validate command anti-replay (nonce uniqueness) and freshness.
+ *
+ * Freshness ladder (per facts §5):
+ *   1. Block-based — if cmd carries `block_height` AND config has
+ *      `max_command_age_blocks` AND we know the current chain height.
+ *   2. Timestamp — legacy nonce-as-Unix-seconds when nonce > 1e9.
+ *   3. None — uniqueness only (back-compat for UUID-style nonces).
  */
 export function validateCommand(
   cmd: AdminCommand,
-  maxCommandAge: number,
+  adminConfig: AdminConfig,
+  currentBlockHeight: number | null,
 ): { valid: boolean; reason?: string } {
   if (isNonceUsed(cmd.nonce)) {
     return { valid: false, reason: `Nonce already used (replay attack prevented)` };
   }
 
-  // If nonce is numeric, also validate as a timestamp
+  // Block-based freshness wins when available
+  if (
+    cmd.block_height !== undefined &&
+    adminConfig.max_command_age_blocks !== undefined &&
+    currentBlockHeight !== null
+  ) {
+    return validateBlockHeight(
+      cmd.block_height,
+      currentBlockHeight,
+      adminConfig.max_command_age_blocks,
+    );
+  }
+
+  // Legacy: numeric-nonce-as-Unix-timestamp freshness
   const nonceNum = parseInt(cmd.nonce, 10);
   if (!isNaN(nonceNum) && nonceNum > 1_000_000_000) {
-    // Looks like a Unix timestamp — validate freshness
-    const tsResult = validateTimestamp(nonceNum, maxCommandAge);
+    const maxAge = adminConfig.max_command_age ?? 300;
+    const tsResult = validateTimestamp(nonceNum, maxAge);
     if (!tsResult.valid) {
       return tsResult;
     }
@@ -224,6 +276,18 @@ export async function processAdminCommands(
   const maxAge = adminConfig.max_command_age ?? 300;
   pruneOldNonces(maxAge);
 
+  // Fetch chain height once per poll for block-based freshness checks.
+  // null when unavailable — block-based path is then skipped per ladder in
+  // validateCommand and we fall through to the legacy timestamp check.
+  let currentBlockHeight: number | null = null;
+  if (adminConfig.max_command_age_blocks !== undefined) {
+    try {
+      currentBlockHeight = await provider.getHeight();
+    } catch (err) {
+      console.error(`[ADMIN] getHeight failed for block-height freshness: ${err}`);
+    }
+  }
+
   let recentTxs: ExplorerTx[];
   try {
     const raw = await provider.getTransactions(adminConfig.wallet_address, 0, 10);
@@ -235,7 +299,7 @@ export async function processAdminCommands(
 
   for (const tx of recentTxs) {
     try {
-      await processTransaction(tx, adminConfig, commandDb);
+      await processTransaction(tx, adminConfig, commandDb, currentBlockHeight);
     } catch (err) {
       console.error(`[ADMIN] Error processing tx ${tx.id}: ${err}`);
     }
@@ -252,6 +316,7 @@ async function processTransaction(
   tx: ExplorerTx,
   adminConfig: AdminConfig,
   commandDb: CommandDatabase,
+  currentBlockHeight: number | null,
 ): Promise<void> {
   const outputs = tx.outputs;
   if (!outputs || outputs.length === 0) return;
@@ -274,8 +339,7 @@ async function processTransaction(
 
     console.log(`[ADMIN] Verified admin command from tx: ${tx.id}`);
 
-    const maxAge = adminConfig.max_command_age ?? 300;
-    const validation = validateCommand(cmd, maxAge);
+    const validation = validateCommand(cmd, adminConfig, currentBlockHeight);
     if (!validation.valid) {
       console.warn(`[ADMIN] Command validation failed: ${validation.reason} (tx: ${tx.id})`);
       continue;

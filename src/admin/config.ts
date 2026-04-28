@@ -55,6 +55,7 @@ export function loadAdminConfig(): AdminConfig | null {
       shared_key: rawKey,
       credential_nft_id: admin.credential_nft_id as string | undefined,
       max_command_age: (admin.max_command_age as number) || 300,
+      max_command_age_blocks: admin.max_command_age_blocks as number | undefined,
     };
   } catch (err) {
     console.error(`[ADMIN] Error loading admin config: ${err}`);

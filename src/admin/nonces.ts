@@ -122,6 +122,41 @@ export function validateTimestamp(
   return { valid: true };
 }
 
+/** Future tolerance for block-height freshness (facts §5: suggest 2 blocks). */
+const FUTURE_TOLERANCE_BLOCKS = 2;
+
+/**
+ * Validate a command's block height against the current chain height.
+ *
+ * @param payloadHeight  Block height carried in the command payload
+ * @param currentHeight  Current chain height as observed by the engine
+ * @param maxAgeBlocks   Maximum acceptable age in blocks (from admin config)
+ * @returns Object with valid flag and reason on failure
+ */
+export function validateBlockHeight(
+  payloadHeight: number,
+  currentHeight: number,
+  maxAgeBlocks: number,
+): { valid: boolean; reason?: string } {
+  const ageBlocks = currentHeight - payloadHeight;
+
+  if (ageBlocks < -FUTURE_TOLERANCE_BLOCKS) {
+    return {
+      valid: false,
+      reason: `Command block_height is in the future (${-ageBlocks} blocks ahead)`,
+    };
+  }
+
+  if (ageBlocks > maxAgeBlocks) {
+    return {
+      valid: false,
+      reason: `Command too old (${ageBlocks} blocks, max: ${maxAgeBlocks})`,
+    };
+  }
+
+  return { valid: true };
+}
+
 /**
  * Mark a nonce as used (call BEFORE executing command).
  */

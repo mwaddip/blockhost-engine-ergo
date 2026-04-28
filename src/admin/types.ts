@@ -7,11 +7,17 @@ import type { ChildProcess } from "child_process";
 /**
  * Admin command payload (parsed from transaction metadata)
  *
- * Wire format: "{nonce} {command}" + HMAC-SHA256(sharedKey)[:16 bytes]
+ * Wire format (HMAC-SHA256(sharedKey)[:16] suffix on both):
+ *   v0 (legacy): "{nonce} {command}"
+ *   v1 (block-height aware): "v1 {nonce} {block_height} {command}"
+ *
+ * v1 carries the chain height the sender saw when issuing the command, so
+ * the engine can apply block-based freshness per facts §5.
  */
 export interface AdminCommand {
   command: string;           // Command text (maps to action in command database)
   nonce: string;             // Anti-replay nonce
+  block_height?: number;     // Preferred freshness anchor (v1 wire format only)
 }
 
 /**
@@ -30,7 +36,8 @@ export interface AdminConfig {
   wallet_address: string;           // Admin wallet (Base58 Ergo address)
   shared_key: string;               // HMAC shared key (32-byte hex, no prefix)
   credential_nft_id?: string;       // Admin NFT token ID (optional)
-  max_command_age?: number;         // Deprecated: pruning is now block-height based. Kept for config compat.
+  max_command_age?: number;         // Legacy: seconds. Falls back when v1 wire format absent.
+  max_command_age_blocks?: number;  // Preferred per facts §5 (Ergo default ~3 blocks ≈ 5 min). Wins over max_command_age when v1 wire format carries block_height.
 }
 
 /**
