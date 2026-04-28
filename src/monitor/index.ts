@@ -264,7 +264,7 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  const provider = createProvider(config.explorerUrl, config.signerUrl);
+  const provider = createProvider(config.explorerUrl, config.signerUrl, config.submitUrl);
   const mainnet = config.network === "mainnet";
 
   // Load server identity (ECIES key — used by handlers for decryption, not for

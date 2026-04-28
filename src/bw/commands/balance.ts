@@ -18,6 +18,13 @@ import {
 
 // -- Types ------------------------------------------------------------------
 
+export interface TokenAmount {
+  tokenId: string;
+  amount: bigint;
+  name?: string;
+  decimals?: number;
+}
+
 export interface BalanceResult {
   address: string;
   nanoErg: bigint;
@@ -25,6 +32,8 @@ export interface BalanceResult {
   tokenId?: string;
   tokenName?: string;
   tokenDecimals?: number;
+  /** All tokens at this address. Populated only when no specific token was requested. */
+  allTokens?: TokenAmount[];
 }
 
 // -- Core function (used by fund-manager) -----------------------------------
@@ -60,6 +69,8 @@ export async function executeBalance(
     result.tokenId = tokenId;
     result.tokenName = entry?.name;
     result.tokenDecimals = entry?.decimals;
+  } else {
+    result.allTokens = balance.tokens;
   }
 
   return result;
@@ -83,7 +94,6 @@ export async function balanceCommand(
   }
 
   const result = await executeBalance(roleOrAddr, tokenArg, book);
-  const provider = getProviderClient();
 
   console.log(`\nBalances for ${roleOrAddr} (${result.address}):\n`);
   console.log(`  ERG          ${formatErg(result.nanoErg)}`);
@@ -93,10 +103,8 @@ export async function balanceCommand(
     console.log(
       `  ${label.padEnd(12)} ${formatToken(result.tokenBalance, result.tokenDecimals ?? 0, "")}`,
     );
-  } else if (!tokenArg) {
-    // Show all token balances
-    const balance = await provider.getBalance(result.address);
-    for (const t of balance.tokens) {
+  } else if (result.allTokens) {
+    for (const t of result.allTokens) {
       const label = t.name ?? t.tokenId.slice(0, 12) + "...";
       console.log(
         `  ${label.padEnd(12)} ${formatToken(t.amount, t.decimals ?? 0, "")}`,

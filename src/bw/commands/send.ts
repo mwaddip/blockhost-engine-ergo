@@ -13,7 +13,12 @@ import {
   SAFE_MIN_BOX_VALUE,
 } from "@fleet-sdk/core";
 import type { Addressbook } from "../../fund-manager/types.js";
-import { resolveAddress, resolveToken, getProviderClient } from "../cli-utils.js";
+import {
+  resolveAddress,
+  resolveToken,
+  getProviderClient,
+  parseAmountToBaseUnits,
+} from "../cli-utils.js";
 import { loadPrivateKey } from "../key-utils.js";
 
 /**
@@ -50,8 +55,10 @@ export async function executeSend(
   let unsignedTx;
 
   if (isErg) {
-    // ERG transfer: amount is in ERG (decimal), convert to nanoERG
-    const nanoErg = BigInt(Math.round(parseFloat(amountStr) * 1_000_000_000));
+    // ERG transfer: amount is in ERG (decimal), convert to nanoERG.
+    // String-based parsing (parseAmountToBaseUnits) preserves precision —
+    // parseFloat would round past ~7 significant digits.
+    const nanoErg = parseAmountToBaseUnits(amountStr, 9);
 
     unsignedTx = new TransactionBuilder(height)
       .from(inputs)

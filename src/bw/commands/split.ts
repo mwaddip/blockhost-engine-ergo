@@ -22,6 +22,7 @@ import {
   formatErg,
   formatToken,
   getProviderClient,
+  parseAmountToBaseUnits,
 } from "../cli-utils.js";
 import { loadPrivateKey } from "../key-utils.js";
 
@@ -148,17 +149,3 @@ export async function splitCommand(
   console.log("Done.");
 }
 
-// -- Helpers ----------------------------------------------------------------
-
-/**
- * Parse a human-readable amount string into base units.
- *
- * "1.5" with decimals=9 -> 1_500_000_000n
- * "100" with decimals=0 -> 100n
- */
-function parseAmountToBaseUnits(amountStr: string, decimals: number): bigint {
-  const parts = amountStr.split(".");
-  const wholePart = parts[0] ?? "0";
-  const fracPart = (parts[1] ?? "").slice(0, decimals).padEnd(decimals, "0");
-  return BigInt(wholePart) * BigInt(10 ** decimals) + BigInt(fracPart || "0");
-}

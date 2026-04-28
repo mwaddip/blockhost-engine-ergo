@@ -121,6 +121,23 @@ export function getProviderClient(): ErgoProvider {
   return createProvider(explorerUrl, signerUrl, submitUrl);
 }
 
+// ── Amount parsing ───────────────────────────────────────────────────────────
+
+/**
+ * Parse a human-readable amount string into base units.
+ *
+ * "1.5" with decimals=9 -> 1_500_000_000n
+ * "100" with decimals=0 -> 100n
+ *
+ * Uses string splitting (not floating-point) to preserve full precision.
+ */
+export function parseAmountToBaseUnits(amountStr: string, decimals: number): bigint {
+  const parts = amountStr.split(".");
+  const wholePart = parts[0] ?? "0";
+  const fracPart = (parts[1] ?? "").slice(0, decimals).padEnd(decimals, "0");
+  return BigInt(wholePart) * BigInt(10 ** decimals) + BigInt(fracPart || "0");
+}
+
 // ── Formatting helpers ────────────────────────────────────────────────────────
 
 /**
