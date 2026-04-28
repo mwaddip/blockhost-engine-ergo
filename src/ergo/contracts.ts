@@ -21,6 +21,7 @@
  */
 
 import { ErgoAddress, Network } from "@fleet-sdk/core";
+import { hex } from "@fleet-sdk/crypto";
 import { ergoTreeFromAddress } from "./address.js";
 
 // ---------------------------------------------------------------------------
@@ -186,9 +187,9 @@ export function substituteErgoTreePk(
     throw new Error(`Expected 66 hex char compressed public key, got ${serverPkHex.length}`);
   }
 
-  const treeBytes = hexToBytes(templateHex);
-  const templatePkBytes = hexToBytes(templatePkHex);
-  const serverPkBytes = hexToBytes(serverPkHex);
+  const treeBytes = hex.decode(templateHex);
+  const templatePkBytes = hex.decode(templatePkHex);
+  const serverPkBytes = hex.decode(serverPkHex);
 
   const loc = findPkConstant(treeBytes, templatePkBytes);
   if (!loc) {
@@ -201,7 +202,7 @@ export function substituteErgoTreePk(
     result[loc.offset + i] = serverPkBytes[i]!;
   }
 
-  return bytesToHex(result);
+  return hex.encode(result);
 }
 
 // ---------------------------------------------------------------------------
@@ -363,18 +364,3 @@ export async function compileToP2SAddress(
   return ((await res.json()) as { address: string }).address;
 }
 
-// ---------------------------------------------------------------------------
-// Hex helpers (avoid importing from other modules for self-containment)
-// ---------------------------------------------------------------------------
-
-function hexToBytes(hex: string): Uint8Array {
-  const bytes = new Uint8Array(hex.length / 2);
-  for (let i = 0; i < bytes.length; i++) {
-    bytes[i] = parseInt(hex.substring(i * 2, i * 2 + 2), 16);
-  }
-  return bytes;
-}
-
-function bytesToHex(bytes: Uint8Array): string {
-  return Array.from(bytes).map(b => b.toString(16).padStart(2, "0")).join("");
-}

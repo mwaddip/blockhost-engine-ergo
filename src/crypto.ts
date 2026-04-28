@@ -10,6 +10,7 @@ import { secp256k1 } from "@noble/curves/secp256k1";
 import { hkdf } from "@noble/hashes/hkdf";
 import { sha256 } from "@noble/hashes/sha2";
 import { shake256 } from "@noble/hashes/sha3";
+import { hex } from "@fleet-sdk/crypto";
 import { createDecipheriv, createCipheriv, randomBytes } from "node:crypto";
 import * as fs from "node:fs";
 
@@ -17,20 +18,12 @@ const SERVER_KEY_PATH = "/etc/blockhost/server.key";
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
-export function hexToBytes(hex: string): Uint8Array {
-  if (hex.startsWith("0x")) hex = hex.slice(2);
-  const bytes = new Uint8Array(hex.length / 2);
-  for (let i = 0; i < bytes.length; i++) {
-    bytes[i] = parseInt(hex.substring(i * 2, i * 2 + 2), 16);
-  }
-  return bytes;
+/** Decode hex to bytes, defensively stripping a leading "0x" if present. */
+export function hexToBytes(input: string): Uint8Array {
+  return hex.decode(input.startsWith("0x") ? input.slice(2) : input);
 }
 
-function bytesToHex(bytes: Uint8Array): string {
-  return Array.from(bytes)
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-}
+const bytesToHex = hex.encode;
 
 // ── ECIES Decrypt ────────────────────────────────────────────────────
 
