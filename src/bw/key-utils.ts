@@ -7,7 +7,6 @@
  */
 
 import * as fs from "fs";
-import { addressFromPrivateKey } from "../ergo/address.js";
 import type { Addressbook } from "../fund-manager/types.js";
 
 export interface KeyInfo {
@@ -46,12 +45,4 @@ export function loadPrivateKey(role: string, book: Addressbook): KeyInfo {
   const address = entry.address;
 
   return { privKeyHex, address };
-}
-
-/**
- * Derive the address from a private key hex string.
- * Used when we need to verify the key matches the addressbook entry.
- */
-export function deriveAddress(privKeyHex: string, mainnet = true): string {
-  return addressFromPrivateKey(privKeyHex, mainnet);
 }

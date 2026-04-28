@@ -58,13 +58,6 @@ export function ergoTreeFromAddress(address: string): string {
   return addr.ergoTree;
 }
 
-/**
- * Check if an address is a mainnet address.
- */
-export function isMainnet(address: string): boolean {
-  return ErgoAddress.getNetworkType(address) === Network.Mainnet;
-}
-
 /** Extract the compressed public key hex from a P2PK address */
 export function publicKeyFromAddress(address: string): string {
   const tree = ergoTreeFromAddress(address);

@@ -7,12 +7,13 @@
 
 import * as fs from "fs";
 import type { Addressbook } from "./types.js";
-import { isValidAddress } from "../ergo/address.js";
+import { isValidAddress, addressFromPrivateKey } from "../ergo/address.js";
 import {
   generateWallet as rootAgentGenerateWallet,
   addressbookSave,
 } from "../root-agent/client.js";
 import { ADDRESSBOOK_PATH, CONFIG_DIR } from "../paths.js";
+import { loadNetworkConfig } from "./web3-config.js";
 
 const HOT_KEY_PATH = `${CONFIG_DIR}/hot.key`;
 
@@ -102,8 +103,6 @@ export async function ensureHotWallet(book: Addressbook): Promise<Addressbook> {
   if (fs.existsSync(HOT_KEY_PATH)) {
     console.log("[FUND] Hot wallet key exists, deriving address...");
     const privKeyHex = fs.readFileSync(HOT_KEY_PATH, "utf8").trim();
-    const { addressFromPrivateKey } = await import("../ergo/address.js");
-    const { loadNetworkConfig } = await import("./web3-config.js");
     const config = loadNetworkConfig();
     const mainnet = config.network === "mainnet";
     const address = addressFromPrivateKey(privKeyHex, mainnet);

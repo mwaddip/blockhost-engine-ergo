@@ -36,8 +36,6 @@ import {
 import { publicKeyFromAddress } from "../../ergo/address.js";
 import { loadNetworkConfig } from "../../fund-manager/web3-config.js";
 
-const MAX_BATCH = 15; // max subscription boxes per transaction
-
 // -- Claimability analysis --------------------------------------------------
 
 interface ClaimableInfo {
@@ -172,126 +170,108 @@ export async function executeWithdraw(
     console.log("No claimable subscription boxes at this time.");
     return;
   }
+
+  // Process exactly one subscription per transaction. The guard script
+  // checks OUTPUTS(0) for the continuing box, so multi-box withdrawal
+  // is not possible without a contract change.
+  const info = claimable[0]!;
   console.error(
-    `${claimable.length} claimable box(es) (processing up to ${MAX_BATCH})`,
+    `${claimable.length} claimable box(es); collecting from 1 this tx`,
   );
 
-  // Process one subscription at a time — the guard script checks OUTPUTS(0)
-  // for the continuing box, so we can only have one per tx
-  const batch = claimable.slice(0, 1);
-
-  // Reuse the height fetched for claimability analysis above
   const serverBoxes = await provider.getUnspentBoxes(serverAddress);
 
-  // Build the transaction
-  // IMPORTANT: subscription box must be FIRST input (its guard script runs)
-  // Server boxes follow (for fee payment)
-  const allInputBoxes: ErgoBox[] = [...batch.map((b) => b.box), ...serverBoxes];
+  // Subscription box MUST be first input — its guard script runs.
+  // Server boxes follow for fee payment.
+  const allInputBoxes: ErgoBox[] = [info.box, ...serverBoxes];
 
   const txBuilder = new TransactionBuilder(currentHeight).from(
     allInputBoxes as unknown as Box<Amount>[],
   );
 
-  // Build outputs in correct order:
-  // OUTPUTS(0) = continuing subscription box (guard script checks this)
-  // OUTPUTS(1) = collected funds to recipient
-  // OUTPUTS(2) = miner fee
-  // OUTPUTS(3+) = change
-  const continuingOutputs: OutputBuilder[] = [];
-  let totalCollected = 0n;
+  // Output order:
+  //   OUTPUTS(0) — continuing subscription box (guard checks this)
+  //   OUTPUTS(1) — collected funds to recipient
+  //   OUTPUTS(2) — miner fee
+  //   OUTPUTS(3+) — change
+  let continuingOutput: OutputBuilder;
 
-  for (const info of batch) {
-    totalCollected += info.collectAmount;
+  if (info.fullyConsumed) {
+    // Fully consumed: beacon token is burned. The guard eagerly evaluates
+    // OUTPUTS(0).R4/R5/R6.get even on this path, so OUTPUTS(0) must carry
+    // valid register types — but no beacon token (fullyConsumed verifies
+    // no output contains it).
+    const dummyRegs = encodeSubscriptionRegisters(info.state);
+    continuingOutput = new OutputBuilder(SAFE_MIN_BOX_VALUE, serverAddress)
+      .setAdditionalRegisters(dummyRegs);
+    if (info.state.beaconTokenId) {
+      const beaconAmount = info.box.assets[0]?.amount ?? 1n;
+      txBuilder.burnTokens({
+        tokenId: info.state.beaconTokenId,
+        amount: beaconAmount,
+      });
+    }
+  } else {
+    // Partial collection: create continuing box with updated state
+    const updatedState: SubscriptionState = {
+      ...info.state,
+      amountRemaining: info.state.amountRemaining - info.collectAmount,
+      lastCollectedHeight:
+        info.state.lastCollectedHeight + Number(info.intervals) * info.state.intervalBlocks,
+    };
 
-    if (info.fullyConsumed) {
-      // Fully consumed: beacon token is burned.
-      // The guard script eagerly evaluates OUTPUTS(0).R4/R5/R6.get even on the
-      // fullyConsumed path. We must create OUTPUTS(0) with valid register types
-      // to avoid a None.get crash, but WITHOUT the beacon token (the fullyConsumed
-      // check verifies no output contains the beacon).
-      const dummyRegs = encodeSubscriptionRegisters(info.state);
-      continuingOutputs.push(
-        new OutputBuilder(SAFE_MIN_BOX_VALUE, serverAddress)
-          .setAdditionalRegisters(dummyRegs),
-      );
-      if (info.state.beaconTokenId) {
-        const beaconAmount = info.box.assets[0]?.amount ?? 1n;
-        txBuilder.burnTokens({
-          tokenId: info.state.beaconTokenId,
-          amount: beaconAmount,
-        });
+    const regs = encodeSubscriptionRegisters(updatedState);
+
+    let continuingValue: bigint;
+    if (info.state.paymentTokenId === "") {
+      // ERG payment: subtract collected amount from box value
+      continuingValue = info.box.value - info.collectAmount;
+      if (continuingValue < SAFE_MIN_BOX_VALUE) {
+        continuingValue = SAFE_MIN_BOX_VALUE;
       }
     } else {
-      // Partial collection: create continuing box with updated state
-      const updatedState: SubscriptionState = {
-        ...info.state,
-        amountRemaining: info.state.amountRemaining - info.collectAmount,
-        lastCollectedHeight:
-          info.state.lastCollectedHeight + Number(info.intervals) * info.state.intervalBlocks,
-      };
+      // Token payment: ERG value stays for box storage
+      continuingValue = info.box.value;
+    }
 
-      const regs = encodeSubscriptionRegisters(updatedState);
+    continuingOutput = new OutputBuilder(
+      continuingValue,
+      subscriptionAddress,
+    ).setAdditionalRegisters(regs);
 
-      // Calculate continuing box value
-      let continuingValue: bigint;
-      if (info.state.paymentTokenId === "") {
-        // ERG payment: subtract collected amount from box value
-        continuingValue = info.box.value - info.collectAmount;
-        if (continuingValue < SAFE_MIN_BOX_VALUE) {
-          continuingValue = SAFE_MIN_BOX_VALUE;
-        }
-      } else {
-        // Token payment: ERG value stays the same (just for box storage)
-        continuingValue = info.box.value;
-      }
+    if (info.state.beaconTokenId) {
+      continuingOutput.addTokens({
+        tokenId: info.state.beaconTokenId,
+        amount: info.box.assets[0]?.amount ?? 1n,
+      });
+    }
 
-      const continuingOutput = new OutputBuilder(
-        continuingValue,
-        subscriptionAddress,
-      ).setAdditionalRegisters(regs);
-
-      // Preserve beacon token
-      if (info.state.beaconTokenId) {
-        continuingOutput.addTokens({
-          tokenId: info.state.beaconTokenId,
-          amount: info.box.assets[0]?.amount ?? 1n,
-        });
-      }
-
-      // Preserve payment token (if token payment, minus collected amount)
-      if (info.state.paymentTokenId !== "") {
-        const payTokenAsset = info.box.assets.find(
-          (a) => a.tokenId === info.state.paymentTokenId,
-        );
-        if (payTokenAsset) {
-          const remainingTokens = payTokenAsset.amount - info.collectAmount;
-          if (remainingTokens > 0n) {
-            continuingOutput.addTokens({
-              tokenId: info.state.paymentTokenId,
-              amount: remainingTokens,
-            });
-          }
+    if (info.state.paymentTokenId !== "") {
+      const payTokenAsset = info.box.assets.find(
+        (a) => a.tokenId === info.state.paymentTokenId,
+      );
+      if (payTokenAsset) {
+        const remainingTokens = payTokenAsset.amount - info.collectAmount;
+        if (remainingTokens > 0n) {
+          continuingOutput.addTokens({
+            tokenId: info.state.paymentTokenId,
+            amount: remainingTokens,
+          });
         }
       }
-
-      continuingOutputs.push(continuingOutput); // MUST be OUTPUTS(0)
     }
   }
 
-  // Add continuing boxes FIRST (guard script checks OUTPUTS(0))
-  for (const out of continuingOutputs) {
-    txBuilder.to(out);
-  }
+  txBuilder.to(continuingOutput);
 
-  // Then collection output
+  const totalCollected = info.collectAmount;
   if (totalCollected > 0n) {
-    const firstInfo = batch[0];
-    if (firstInfo && firstInfo.state.paymentTokenId === "") {
+    if (info.state.paymentTokenId === "") {
       txBuilder.to(new OutputBuilder(totalCollected, toAddress));
-    } else if (firstInfo && firstInfo.state.paymentTokenId !== "") {
+    } else {
       txBuilder.to(
         new OutputBuilder(SAFE_MIN_BOX_VALUE, toAddress).addTokens({
-          tokenId: firstInfo.state.paymentTokenId,
+          tokenId: info.state.paymentTokenId,
           amount: totalCollected,
         }),
       );
@@ -309,7 +289,7 @@ export async function executeWithdraw(
 
   console.log(txId);
   console.error(
-    `Collected from ${batch.length} box(es), total: ${totalCollected.toString()} base units`,
+    `Collected ${totalCollected.toString()} base units from 1 box`,
   );
 }
 

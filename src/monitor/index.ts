@@ -38,8 +38,8 @@ const testingMode = fs.existsSync(TESTING_MODE_FILE);
 
 const POLL_INTERVAL_MS      = testingMode ? 5_000  : 5_000;         // 5s both modes
 const RECONCILE_INTERVAL_MS = testingMode ? 120_000 : 300_000;      // 2min test / 5min prod
-const FUND_CYCLE_INTERVAL_MS = testingMode ? 600_000 : 86_400_000;  // 10min test / 24h prod
-const GAS_CHECK_INTERVAL_MS = testingMode ? 300_000 : 1_800_000;    // 5min test / 30min prod
+// Fund-cycle and gas-check cadences are owned by fund-manager
+// (shouldRunFundCycle / shouldRunGasCheck) and are not gated here.
 
 // -- Pipeline state ----------------------------------------------------------
 
@@ -249,7 +249,7 @@ async function main(): Promise<void> {
   console.log("  BlockHost Ergo Monitor");
   if (testingMode) {
     console.log("  *** TESTING MODE ACTIVE ***");
-    console.log(`  Poll: ${POLL_INTERVAL_MS / 1000}s | Reconcile: ${RECONCILE_INTERVAL_MS / 1000}s | Fund: ${FUND_CYCLE_INTERVAL_MS / 60000}min | Gas: ${GAS_CHECK_INTERVAL_MS / 60000}min`);
+    console.log(`  Poll: ${POLL_INTERVAL_MS / 1000}s | Reconcile: ${RECONCILE_INTERVAL_MS / 1000}s | Fund + gas cadence: see fund-manager`);
   }
   console.log("==============================================");
 
