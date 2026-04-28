@@ -246,20 +246,16 @@ export function contractAddress(ergoTreeHex: string, mainnet = true): string {
 }
 
 // ---------------------------------------------------------------------------
-// Legacy: node-based compilation (for initial template generation only)
+// Canonical script source (documentation)
 // ---------------------------------------------------------------------------
 
-/** Convert compressed pubkey hex to Base64 for ErgoScript fromBase64() */
-export function pubKeyHexToBase64(pubKeyHex: string): string {
-  if (pubKeyHex.length !== 66) {
-    throw new Error(`Expected 66 hex char compressed public key, got ${pubKeyHex.length} chars`);
-  }
-  return Buffer.from(pubKeyHex, "hex").toString("base64");
-}
-
 /**
- * The ErgoScript source for the subscription guard.
- * Only needed for initial template compilation — not used at runtime.
+ * ErgoScript source for the subscription guard. The deployed ErgoTree is
+ * compiled from this exact source — keep them in sync.
+ *
+ * Compilation helpers (compileToP2SAddress, pubKeyHexToBase64) live in
+ * scripts/compile-contracts.ts and are dev-time only. The runtime path is
+ * the pre-compiled SUBSCRIPTION_TREE_TEMPLATE above with constant substitution.
  */
 export const SUBSCRIPTION_SCRIPT_SOURCE = `{
   val serverPk = decodePoint(fromBase64("$$SERVER_PK_BASE64$$"))
@@ -336,31 +332,3 @@ export const SUBSCRIPTION_SCRIPT_SOURCE = `{
   }
   collectPath || cancelPath || extendPath || migratePath
 }`;
-
-/**
- * Compile ErgoScript to P2S address via Ergo node.
- * Only used for initial template generation — not needed at runtime.
- */
-export async function compileToP2SAddress(
-  nodeUrl: string,
-  source: string,
-  apiKey?: string,
-): Promise<string> {
-  const url = `${nodeUrl.replace(/\/+$/, "")}/script/p2sAddress`;
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (apiKey) headers["api_key"] = apiKey;
-
-  const res = await fetch(url, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({ source, treeVersion: 0 }),
-  });
-
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    throw new Error(`ErgoScript compilation failed (${res.status}): ${body}`);
-  }
-
-  return ((await res.json()) as { address: string }).address;
-}
-
