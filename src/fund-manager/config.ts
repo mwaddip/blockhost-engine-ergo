@@ -23,6 +23,11 @@ const DEFAULTS: FundManagerConfig = {
   hot_wallet_gas_nanoerg: 1_000_000_000n,           // 1 ERG — target hot wallet ERG balance
 };
 
+// mtime-based YAML cache. Re-parses only when blockhost.yaml changes on disk.
+// shouldRunFundCycle / shouldRunGasCheck call loadFundManagerConfig() every
+// poll tick, so the cache prevents re-parsing the same file every 5 seconds.
+let fundConfigCache: { mtimeMs: number; config: FundManagerConfig } | null = null;
+
 /**
  * Load fund manager configuration from blockhost.yaml
  */
@@ -32,13 +37,20 @@ export function loadFundManagerConfig(): FundManagerConfig {
       return { ...DEFAULTS };
     }
 
+    const stat = fs.statSync(BLOCKHOST_CONFIG_PATH);
+    if (fundConfigCache && fundConfigCache.mtimeMs === stat.mtimeMs) {
+      return fundConfigCache.config;
+    }
+
     const config = yaml.load(
       fs.readFileSync(BLOCKHOST_CONFIG_PATH, "utf8"),
     ) as Record<string, unknown>;
 
     const fm = config.fund_manager as Record<string, unknown> | undefined;
     if (!fm) {
-      return { ...DEFAULTS };
+      const result = { ...DEFAULTS };
+      fundConfigCache = { mtimeMs: stat.mtimeMs, config: result };
+      return result;
     }
 
     const safeBigInt = (v: unknown, fallback: bigint): bigint => {
@@ -46,7 +58,7 @@ export function loadFundManagerConfig(): FundManagerConfig {
       return BigInt(Math.trunc(Number(v)));
     };
 
-    return {
+    const parsed: FundManagerConfig = {
       fund_cycle_interval_hours:
         (fm.fund_cycle_interval_hours as number) || DEFAULTS.fund_cycle_interval_hours,
       gas_check_interval_minutes:
@@ -72,6 +84,9 @@ export function loadFundManagerConfig(): FundManagerConfig {
         DEFAULTS.hot_wallet_gas_nanoerg,
       ),
     };
+
+    fundConfigCache = { mtimeMs: stat.mtimeMs, config: parsed };
+    return parsed;
   } catch (err) {
     console.error(`[FUND] Error loading config: ${err}`);
     return { ...DEFAULTS };
