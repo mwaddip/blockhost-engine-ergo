@@ -996,10 +996,6 @@ def finalize_chain_config(config: dict) -> tuple[bool, Optional[str]]:
                 pass  # malformed admin_signature — admin commands stay disabled
 
         admin_commands = config.get("admin_commands", {})
-        if admin_commands.get("enabled"):
-            bh_config["admin"]["destination_mode"] = admin_commands.get(
-                "destination_mode", "self"
-            )
 
         bh_path = CONFIG_DIR / "blockhost.yaml"
         _write_yaml(bh_path, bh_config)
