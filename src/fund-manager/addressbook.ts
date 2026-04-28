@@ -12,41 +12,14 @@ import {
   generateWallet as rootAgentGenerateWallet,
   addressbookSave,
 } from "../root-agent/client.js";
-import { ADDRESSBOOK_PATH, CONFIG_DIR } from "../paths.js";
+import { CONFIG_DIR } from "../paths.js";
 import { loadNetworkConfig } from "./web3-config.js";
 
 const HOT_KEY_PATH = `${CONFIG_DIR}/hot.key`;
 
-/**
- * Load addressbook from /etc/blockhost/addressbook.json.
- * Validates all entries have valid Base58 Ergo addresses.
- * Returns empty object if file does not exist.
- */
-export function loadAddressbook(): Addressbook {
-  try {
-    if (!fs.existsSync(ADDRESSBOOK_PATH)) {
-      console.error(`[FUND] Addressbook not found: ${ADDRESSBOOK_PATH}`);
-      return {};
-    }
-
-    const data = fs.readFileSync(ADDRESSBOOK_PATH, "utf8");
-    const book = JSON.parse(data) as Addressbook;
-
-    for (const [role, entry] of Object.entries(book)) {
-      if (!isValidAddress(entry.address)) {
-        console.error(
-          `[FUND] Invalid address for role '${role}': ${entry.address}`,
-        );
-        delete book[role];
-      }
-    }
-
-    return book;
-  } catch (err) {
-    console.error(`[FUND] Error loading addressbook: ${err}`);
-    return {};
-  }
-}
+// Canonical addressbook loader lives in bw/cli-utils.ts. Re-export so existing
+// fund-manager imports (`./addressbook`) keep working without a wider rename.
+export { loadAddressbook } from "../bw/cli-utils.js";
 
 /**
  * Save addressbook via root agent.
