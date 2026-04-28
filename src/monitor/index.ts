@@ -139,25 +139,25 @@ async function maybeRunReconciliation(provider: ErgoProvider): Promise<void> {
   lastReconcile = now;
 }
 
-async function maybeRunFundCycle(): Promise<void> {
+async function maybeRunFundCycle(provider: ErgoProvider): Promise<void> {
   if (pipelineBusy) return;
-  if (!shouldRunFundCycle()) return;
+  if (!(await shouldRunFundCycle(provider))) return;
 
   console.log("[MONITOR] Running fund cycle...");
   try {
-    await runFundManager();
+    await runFundManager(provider);
   } catch (err) {
     console.error(`[MONITOR] Fund cycle error: ${err}`);
   }
 }
 
-async function maybeRunGasCheck(): Promise<void> {
+async function maybeRunGasCheck(provider: ErgoProvider): Promise<void> {
   if (pipelineBusy) return;
-  if (!shouldRunGasCheck()) return;
+  if (!(await shouldRunGasCheck(provider))) return;
 
   console.log("[MONITOR] Running gas check...");
   try {
-    await runGasCheck();
+    await runGasCheck(provider);
   } catch (err) {
     console.error(`[MONITOR] Gas check error: ${err}`);
   }
@@ -208,8 +208,8 @@ async function poll(
 
       // Periodic tasks (only when pipeline is idle)
       await maybeRunReconciliation(provider);
-      await maybeRunFundCycle();
-      await maybeRunGasCheck();
+      await maybeRunFundCycle(provider);
+      await maybeRunGasCheck(provider);
 
     } catch (err) {
       console.error(`[MONITOR] Poll error: ${err}`);

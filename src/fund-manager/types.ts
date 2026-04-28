@@ -3,14 +3,18 @@
  */
 
 export interface FundManagerState {
-  last_fund_cycle: number;        // ms timestamp
-  last_gas_check: number;         // ms timestamp
+  last_fund_cycle: number;             // ms timestamp (legacy, always written)
+  last_gas_check: number;              // ms timestamp (legacy, always written)
+  last_fund_cycle_block?: number;      // block height (preferred when set)
+  last_gas_check_block?: number;       // block height (preferred when set)
   hot_wallet_generated: boolean;
 }
 
 export interface FundManagerConfig {
-  fund_cycle_interval_hours: number;
-  gas_check_interval_minutes: number;
+  fund_cycle_interval_hours: number;          // legacy
+  gas_check_interval_minutes: number;         // legacy
+  fund_cycle_interval_blocks?: number;        // preferred per facts §4
+  gas_check_interval_blocks?: number;         // preferred per facts §4
   min_withdrawal_nanoerg: bigint;
   gas_low_threshold_nanoerg: bigint;
   gas_swap_amount_nanoerg: bigint;

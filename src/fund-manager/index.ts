@@ -25,6 +25,8 @@ import {
 } from "./distribution.js";
 import { executeBalance } from "../bw/commands/balance.js";
 import { formatErg } from "../bw/cli-utils.js";
+import type { ErgoProvider } from "../ergo/provider.js";
+import type { FundManagerState } from "./types.js";
 
 import * as fs from "fs";
 import { TESTING_MODE_FILE } from "../paths.js";
@@ -36,17 +38,29 @@ const testingMode = fs.existsSync(TESTING_MODE_FILE);
 // -- Scheduling helpers -------------------------------------------------------
 
 /**
- * Check if the fund cycle is due to run based on its configured interval.
+ * Check if the fund cycle is due to run.
  *
- * Testing mode: runs every 10 minutes instead of the configured interval.
+ * Block-based when config has `fund_cycle_interval_blocks` and state has a
+ * recorded `last_fund_cycle_block`; falls back to wall-clock otherwise.
+ * Block-based wins when both keys are present (per facts §6).
+ *
+ * Testing mode: runs every 10 minutes wall-clock (config ignored).
  */
-export function shouldRunFundCycle(): boolean {
+export async function shouldRunFundCycle(provider: ErgoProvider): Promise<boolean> {
   const state = loadState();
   if (testingMode) {
-    // Run every 10 minutes in testing mode
     return Date.now() - state.last_fund_cycle >= 600_000;
   }
   const config = loadFundManagerConfig();
+  if (config.fund_cycle_interval_blocks && state.last_fund_cycle_block !== undefined) {
+    try {
+      const currentBlock = await provider.getHeight();
+      return currentBlock - state.last_fund_cycle_block >= config.fund_cycle_interval_blocks;
+    } catch (err) {
+      console.error(`[FUND] getHeight failed in shouldRunFundCycle: ${err}`);
+      return false;
+    }
+  }
   const intervalMs = config.fund_cycle_interval_hours * 3_600_000;
   return Date.now() - state.last_fund_cycle >= intervalMs;
 }
@@ -54,14 +68,26 @@ export function shouldRunFundCycle(): boolean {
 /**
  * Check if the gas check is due.
  *
- * Testing mode: every 1 minute.  Production: every configured interval.
+ * Block-based when config has `gas_check_interval_blocks` and state has a
+ * recorded `last_gas_check_block`; falls back to wall-clock otherwise.
+ *
+ * Testing mode: every 1 minute wall-clock (config ignored).
  */
-export function shouldRunGasCheck(): boolean {
+export async function shouldRunGasCheck(provider: ErgoProvider): Promise<boolean> {
   const state = loadState();
   if (testingMode) {
     return Date.now() - state.last_gas_check >= 60_000;
   }
   const config = loadFundManagerConfig();
+  if (config.gas_check_interval_blocks && state.last_gas_check_block !== undefined) {
+    try {
+      const currentBlock = await provider.getHeight();
+      return currentBlock - state.last_gas_check_block >= config.gas_check_interval_blocks;
+    } catch (err) {
+      console.error(`[FUND] getHeight failed in shouldRunGasCheck: ${err}`);
+      return false;
+    }
+  }
   const intervalMs = config.gas_check_interval_minutes * 60_000;
   return Date.now() - state.last_gas_check >= intervalMs;
 }
@@ -89,7 +115,7 @@ export function isProvisioningInProgress(): boolean {
  * Checks server wallet ERG balance and logs a warning if below threshold.
  * Also tops up hot wallet gas if needed.
  */
-export async function runGasCheck(): Promise<void> {
+export async function runGasCheck(provider: ErgoProvider): Promise<void> {
   try {
     const book = loadAddressbook();
     if (!book["server"]?.address) return;
@@ -117,7 +143,13 @@ export async function runGasCheck(): Promise<void> {
   } catch (err) {
     console.error(`[FUND] Gas check error: ${err}`);
   } finally {
-    updateState({ last_gas_check: Date.now() });
+    const update: Partial<FundManagerState> = { last_gas_check: Date.now() };
+    try {
+      update.last_gas_check_block = await provider.getHeight();
+    } catch (err) {
+      console.error(`[FUND] getHeight failed in runGasCheck finally: ${err}`);
+    }
+    updateState(update);
   }
 }
 
@@ -132,9 +164,9 @@ export async function runGasCheck(): Promise<void> {
  * 4. Top up server stablecoin buffer from hot wallet
  * 5. Revenue shares — distribute % to dev/broker if enabled
  * 6. Remainder to admin — send all remaining hot wallet balance
- * 7. Update state: last_fund_cycle = Date.now()
+ * 7. Update state: last_fund_cycle (ms) and last_fund_cycle_block (height)
  */
-export async function runFundManager(): Promise<void> {
+export async function runFundManager(provider: ErgoProvider): Promise<void> {
   if (fundCycleInProgress) return;
   fundCycleInProgress = true;
 
@@ -211,7 +243,13 @@ export async function runFundManager(): Promise<void> {
   } catch (err) {
     console.error(`[FUND] Error during fund cycle: ${err}`);
   } finally {
-    updateState({ last_fund_cycle: Date.now() });
+    const update: Partial<FundManagerState> = { last_fund_cycle: Date.now() };
+    try {
+      update.last_fund_cycle_block = await provider.getHeight();
+    } catch (err) {
+      console.error(`[FUND] getHeight failed in runFundManager finally: ${err}`);
+    }
+    updateState(update);
     fundCycleInProgress = false;
   }
 }

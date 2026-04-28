@@ -63,6 +63,8 @@ export function loadFundManagerConfig(): FundManagerConfig {
         (fm.fund_cycle_interval_hours as number) || DEFAULTS.fund_cycle_interval_hours,
       gas_check_interval_minutes:
         (fm.gas_check_interval_minutes as number) || DEFAULTS.gas_check_interval_minutes,
+      fund_cycle_interval_blocks: fm.fund_cycle_interval_blocks as number | undefined,
+      gas_check_interval_blocks: fm.gas_check_interval_blocks as number | undefined,
       min_withdrawal_nanoerg: safeBigInt(
         fm.min_withdrawal_nanoerg,
         DEFAULTS.min_withdrawal_nanoerg,
