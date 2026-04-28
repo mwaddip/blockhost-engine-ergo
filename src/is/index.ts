@@ -92,14 +92,16 @@ async function main(): Promise<void> {
     const provider = getProviderClient();
 
     try {
-      // Look up the token to find its current box, then check ownership
-      const tokenInfo = await provider.getToken(tokenId);
-      const box = await provider.getBox(tokenInfo.boxId);
-      // Derive address from box's ErgoTree and compare with wallet
-      const boxErgoTree = box.ergoTree;
+      // Find the unspent box currently holding the token. /tokens/{id} returns
+      // the issuance box, which is fixed at mint and lies after any transfer.
+      const boxes = await provider.getBoxesByTokenId(tokenId);
+      const holder = boxes.find((b) => b.assets.some((a) => a.tokenId === tokenId));
+      if (!holder) {
+        process.exit(1);
+      }
       const walletErgoTree = ergoTreeFromAddress(walletAddr);
       process.exit(
-        boxErgoTree.toLowerCase() === walletErgoTree.toLowerCase() ? 0 : 1,
+        holder.ergoTree.toLowerCase() === walletErgoTree.toLowerCase() ? 0 : 1,
       );
     } catch {
       process.exit(1);

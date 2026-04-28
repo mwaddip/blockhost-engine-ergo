@@ -427,13 +427,12 @@ class ErgoProviderImpl implements ErgoProvider {
   async getBoxesByTokenId(tokenId: string): Promise<ErgoBox[]> {
     assertSafePathSegment(tokenId, "tokenId");
     const all: ErgoBox[] = [];
-    const limit = 500;
+    // Explorer caps /boxes/byTokenId/{id} at 100 items per page. We use the
+    // spent+unspent endpoint and filter client-side because the /unspent
+    // variant 404s on testnet. Pagination must use the same limit it requests.
+    const pageLimit = 100;
     let offset = 0;
     while (true) {
-      // Use /boxes/byTokenId/{id} (returns both spent and unspent)
-      // and filter for unspent (spentTransactionId === null)
-      // Explorer caps limit at 100 for this endpoint
-      const pageLimit = Math.min(limit, 100);
       const res = await this.explorerGet<ExplorerBoxListResponse>(
         `/boxes/byTokenId/${tokenId}?offset=${offset}&limit=${pageLimit}`,
       );
@@ -441,8 +440,8 @@ class ErgoProviderImpl implements ErgoProvider {
         (b) => !(b as any).spentTransactionId,
       );
       all.push(...unspent.map(normalizeExplorerBox));
-      if (res.items.length < limit) break;
-      offset += limit;
+      if (res.items.length < pageLimit) break;
+      offset += pageLimit;
     }
     return all;
   }

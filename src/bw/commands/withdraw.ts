@@ -180,8 +180,7 @@ export async function executeWithdraw(
   // for the continuing box, so we can only have one per tx
   const batch = claimable.slice(0, 1);
 
-  // Get current height and server's boxes for fees/change
-  const height = await provider.getHeight();
+  // Reuse the height fetched for claimability analysis above
   const serverBoxes = await provider.getUnspentBoxes(serverAddress);
 
   // Build the transaction
@@ -189,7 +188,7 @@ export async function executeWithdraw(
   // Server boxes follow (for fee payment)
   const allInputBoxes: ErgoBox[] = [...batch.map((b) => b.box), ...serverBoxes];
 
-  const txBuilder = new TransactionBuilder(height).from(
+  const txBuilder = new TransactionBuilder(currentHeight).from(
     allInputBoxes as unknown as Box<Amount>[],
   );
 

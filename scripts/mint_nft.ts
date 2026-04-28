@@ -201,8 +201,7 @@ async function main(): Promise<void> {
 
   if (dryRun) {
     process.stderr.write("[DRY RUN] Would mint -- not broadcasting\n");
-    // In dry run, output a placeholder token ID
-    process.stdout.write(`dry-run-token-id-placeholder\n`);
+    process.stdout.write(`BLOCKHOST_RESULT: dry-run-token-id-placeholder\n`);
     return;
   }
 
@@ -223,8 +222,7 @@ async function main(): Promise<void> {
   process.stderr.write(`Transaction submitted: ${result.txId}\n`);
   process.stderr.write(`Token ID: ${result.tokenId}\n`);
 
-  // Output only the token ID to stdout for machine consumption
-  process.stdout.write(`${result.tokenId}\n`);
+  process.stdout.write(`BLOCKHOST_RESULT: ${result.tokenId}\n`);
 }
 
 main().catch((err: unknown) => {

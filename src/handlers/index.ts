@@ -22,7 +22,8 @@ import * as fs from "node:fs";
 import type { TrackedSubscription } from "../monitor/scanner.js";
 import { eciesDecrypt, symmetricEncrypt, loadServerPrivateKey } from "../crypto.js";
 import { getCommand } from "../provisioner.js";
-import { CONFIG_DIR, STATE_DIR, VMS_JSON_PATH, PYTHON_TIMEOUT_MS } from "../paths.js";
+import { getProviderClient } from "../bw/cli-utils.js";
+import { CONFIG_DIR, STATE_DIR, PYTHON_TIMEOUT_MS } from "../paths.js";
 
 // -- Constants ---------------------------------------------------------------
 const SSH_PORT = 22;
@@ -227,7 +228,9 @@ function networkHookCleanup(vmName: string, mode: string): void {
 
 // -- Output parsers ----------------------------------------------------------
 
-/** Summary JSON emitted by blockhost-vm-create (last JSON line in stdout) */
+const RESULT_PREFIX = "BLOCKHOST_RESULT: ";
+
+/** Summary JSON emitted by blockhost-vm-create on the BLOCKHOST_RESULT: line */
 interface VmCreateSummary {
   status: string;
   vm_name: string;
@@ -236,30 +239,32 @@ interface VmCreateSummary {
   username: string;
 }
 
-function parseVmSummary(stdout: string): VmCreateSummary | null {
-  const lines = stdout.trim().split("\n");
+function findResultPayload(stdout: string): string | null {
+  const lines = stdout.split("\n");
   for (let i = lines.length - 1; i >= 0; i--) {
-    const line = lines[i]!.trim();
-    if (line.startsWith("{")) {
-      try {
-        return JSON.parse(line) as VmCreateSummary;
-      } catch {
-        return null;
-      }
+    const line = lines[i]!;
+    const idx = line.indexOf(RESULT_PREFIX);
+    if (idx !== -1) {
+      return line.slice(idx + RESULT_PREFIX.length).trim();
     }
   }
   return null;
 }
 
-/**
- * Parse the token ID from blockhost-mint-nft stdout.
- * The mint script prints the token ID (64-char hex) as the only stdout line.
- */
+function parseVmSummary(stdout: string): VmCreateSummary | null {
+  const payload = findResultPayload(stdout);
+  if (!payload) return null;
+  try {
+    return JSON.parse(payload) as VmCreateSummary;
+  } catch {
+    return null;
+  }
+}
+
 function parseMintTokenId(stdout: string): string | null {
-  const trimmed = stdout.trim();
-  // Ergo token IDs are 64-char hex strings
-  if (/^[0-9a-fA-F]{64}$/.test(trimmed)) {
-    return trimmed;
+  const payload = findResultPayload(stdout);
+  if (payload && /^[0-9a-fA-F]{64}$/.test(payload)) {
+    return payload;
   }
   return null;
 }
@@ -289,6 +294,26 @@ db.set_nft_minted(os.environ['VM_NAME'], os.environ['NFT_TOKEN_ID'])
   }
 }
 
+function updateVmFields(vmName: string, fields: Record<string, unknown>): void {
+  const script = `
+import os, json
+from blockhost.vm_db import get_database
+db = get_database()
+db.update_fields(os.environ['VM_NAME'], json.loads(os.environ['FIELDS_JSON']))
+`;
+  const result = spawnSync("python3", ["-c", script], {
+    cwd: STATE_DIR,
+    timeout: PYTHON_TIMEOUT_MS,
+    env: { ...process.env, VM_NAME: vmName, FIELDS_JSON: JSON.stringify(fields) },
+  });
+  if (result.status !== 0) {
+    const errMsg = result.stderr ? result.stderr.toString().trim() : "";
+    console.warn(
+      `[WARN] Failed to update VM fields for ${vmName}${errMsg ? ": " + errMsg : ""}`,
+    );
+  }
+}
+
 // -- VM lifecycle helpers ----------------------------------------------------
 
 async function destroyVm(vmName: string): Promise<{ success: boolean; output: string }> {
@@ -313,7 +338,8 @@ export async function handleSubscriptionCreated(sub: TrackedSubscription): Promi
 
   const vmId = allocateVmId();
   const vmName = formatVmName(vmId);
-  const expiryDays = calculateExpiryDays(state.expiryHeight, state.creationHeight);
+  const currentHeight = await getProviderClient().getHeight();
+  const expiryDays = calculateExpiryDays(state.expiryHeight, currentHeight);
 
   const networkMode = readNetworkMode();
 
@@ -361,20 +387,10 @@ export async function handleSubscriptionCreated(sub: TrackedSubscription): Promi
 
   console.log(`[OK] VM ${vmName} provisioned successfully`);
 
-  // Save beacon token ID to vms.json so the scanner can skip it on restart
-  try {
-    const dbPath = VMS_JSON_PATH;
-    if (fs.existsSync(dbPath)) {
-      const db = JSON.parse(fs.readFileSync(dbPath, "utf8")) as Record<string, Record<string, Record<string, unknown>>>;
-      if (db["vms"]?.[vmName]) {
-        db["vms"][vmName]["beacon_token_id"] = beaconTokenId;
-        db["vms"][vmName]["box_id"] = boxId;
-        fs.writeFileSync(dbPath, JSON.stringify(db, null, 2));
-      }
-    }
-  } catch {
-    // Non-fatal -- scanner will re-detect but provisioner will skip existing VM
-  }
+  // Record Ergo-specific fields (beacon, box id) on the VM record. The
+  // provisioner registered the row; we extend it via the agnostic update_fields
+  // mutator. Non-fatal: scanner re-detects the box on restart if this fails.
+  updateVmFields(vmName, { beacon_token_id: beaconTokenId, box_id: boxId });
 
   // Step 3: Parse JSON summary from provisioner stdout
   const summary = parseVmSummary(createResult.stdout);

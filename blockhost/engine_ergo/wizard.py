@@ -321,22 +321,19 @@ def api_validate_mnemonic():
     if not re.match(r"^[a-z ]+$", mnemonic_phrase):
         return jsonify({"error": "Mnemonic must contain only lowercase words"}), 400
 
-    blockchain = session.get("blockchain", {})
-    network = blockchain.get("network", "testnet")
-
     try:
+        # mnemonic-to-address validates the BIP39 phrase and prints the derived
+        # P2PK address (network is decided by /etc/blockhost/.testing-mode).
         result = subprocess.run(
-            ["bhcrypt", "validate-mnemonic", network],
+            ["bhcrypt", "mnemonic-to-address"] + words,
             capture_output=True,
             text=True,
             timeout=30,
-            env={**os.environ, "MNEMONIC": mnemonic_phrase},
         )
 
         if result.returncode == 0 and result.stdout.strip():
-            addr_data = json.loads(result.stdout.strip())
             return jsonify({
-                "address": addr_data["address"],
+                "address": result.stdout.strip(),
                 "mnemonic": mnemonic_phrase,
             })
         else:
