@@ -28,19 +28,11 @@ const MAX_KNOCK_DURATION_S = 3600;      // 1 hour hard cap on pre-login duration
 
 /**
  * Validate an IP address (IPv4 or IPv6) using net.isIP().
- * Defense against injection via .active file content.
+ * Defense against injection via .active file content or admin command params.
  */
 function isValidIP(addr: string): boolean {
   if (!addr || /\s/.test(addr)) return false;
   return net.isIP(addr) !== 0;
-}
-
-/**
- * Validate an IPv6 address (basic format check)
- */
-function isValidIPv6(addr: string): boolean {
-  if (!addr || /\s/.test(addr)) return false;
-  return net.isIPv6(addr);
 }
 
 // --- Active File Helpers ---
@@ -342,12 +334,13 @@ export async function executeKnock(
     MAX_KNOCK_DURATION_S,
   );
 
-  // Validate optional source IPv6 address
+  // Validate optional source IP (v4 or v6) — both are accepted symmetrically
+  // with phase-2 auth.log narrowing.
   const source = params.source;
-  if (source && !isValidIPv6(source)) {
+  if (source && !isValidIP(source)) {
     return {
       success: false,
-      message: `Invalid IPv6 source address: ${source}`,
+      message: `Invalid IP source address: ${source}`,
     };
   }
 
