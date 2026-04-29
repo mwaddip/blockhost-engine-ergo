@@ -4,33 +4,34 @@
  * Adapts the Cardano handler pipeline for Ergo's beacon-based detection model.
  * Input is TrackedSubscription (from the subscription scanner), not a contract event.
  *
- * Pipeline for new subscriptions:
+ * Pipeline for new subscriptions (per ENGINE_INTERFACE §13):
  *   1. Decrypt userEncrypted from registers (ECIES with server key)
  *   2. Call provisioner: blockhost-vm-create with --owner-wallet and --expiry-days
  *   3. Parse JSON summary from provisioner stdout
- *   4. Resolve subscriber-facing host via network_hook.get_connection_endpoint()
- *   5. Encrypt connection details (SHAKE256 symmetric)
+ *   4. Resolve public address via blockhost-network-hook public-address (no fallback)
+ *   5. Encrypt connection details (SHAKE256 symmetric) with that host
  *   6. Call: blockhost-mint-nft with --owner-wallet and --user-encrypted
- *   7. Call provisioner: blockhost-vm-update-gecos with VM name, wallet, NFT ID
- *   8. Mark NFT minted in database (Python subprocess)
+ *   7. Push mode-specific guest config: blockhost-network-hook push-vm-config
+ *      (success/failure persisted as network_config_synced; reconciler retries)
+ *   8. Call provisioner: blockhost-vm-update-gecos with VM name, wallet, NFT ID
+ *   9. Mark NFT minted in database
  *
  * VM naming: blockhost-NNN (3-digit zero-padded), auto-incrementing counter.
  */
 
 import { spawn, spawnSync } from "child_process";
-import * as fs from "node:fs";
 import type { TrackedSubscription } from "../monitor/scanner.js";
 import { eciesDecrypt, symmetricEncrypt, loadServerPrivateKey } from "../crypto.js";
 import { getCommand } from "../provisioner.js";
 import { getProviderClient } from "../bw/cli-utils.js";
 import { allocateCounter } from "../util/counter.js";
-import { CONFIG_DIR, STATE_DIR, PYTHON_TIMEOUT_MS } from "../paths.js";
+import { STATE_DIR, PYTHON_TIMEOUT_MS } from "../paths.js";
 
 // -- Constants ---------------------------------------------------------------
 const SSH_PORT = 22;
 const NEXT_VM_ID_FILE = `${STATE_DIR}/next-vm-id`;
-const NETWORK_MODE_PATH = `${CONFIG_DIR}/network-mode`;
-// Onion mode can call root-agent (tor-hidden-service-add) which may reload tor.
+// Onion-mode public-address may launch a hidden service and reload tor;
+// push-vm-config runs guest-exec which can take a moment if the agent is busy.
 const NETWORK_HOOK_TIMEOUT_MS = 30_000;
 
 /**
@@ -124,54 +125,63 @@ function runCommand(
   });
 }
 
-// -- Network hook (network-mode-agnostic endpoint resolution) ----------------
+// -- Network-layer dispatcher (blockhost-network-hook CLI) -------------------
 
-function readNetworkMode(): string {
-  try {
-    const mode = fs.readFileSync(NETWORK_MODE_PATH, "utf8").trim();
-    return mode || "broker";
-  } catch {
-    return "broker";
+/**
+ * Resolve the publicly-routable address for a VM. The dispatcher reads
+ * vm-db.network_mode and forwards to the active plugin's `public-address`.
+ *
+ * Throws on non-zero exit or empty stdout. Engines must NOT fall back to
+ * the bridge IP -- a missing address means the NFT would be minted with
+ * unroutable data, which silently breaks subscriber connectivity.
+ */
+function getPublicAddress(vmName: string): string {
+  const result = spawnSync("blockhost-network-hook", ["public-address", vmName], {
+    cwd: STATE_DIR,
+    timeout: NETWORK_HOOK_TIMEOUT_MS,
+    encoding: "utf8",
+  });
+  if (result.status !== 0) {
+    const err = (result.stderr || result.stdout || "").trim();
+    throw new Error(`blockhost-network-hook public-address failed: ${err || `exit ${String(result.status)}`}`);
   }
+  const host = result.stdout.trim();
+  if (host.length === 0) {
+    throw new Error("blockhost-network-hook public-address returned empty stdout");
+  }
+  return host;
 }
 
 /**
- * Ask blockhost.network_hook for the subscriber-facing host for this VM.
- * Return value depends on mode:
- *   broker -> IPv6 from broker-allocation.json
- *   manual -> static IP from config
- *   onion  -> .onion address (creates hidden service and pushes into VM)
+ * Push mode-specific configuration into the VM via the active plugin.
+ * Idempotent. Returns true on success, false on retryable failure.
  */
-function getConnectionEndpoint(vmName: string, bridgeIp: string, mode: string): string {
-  const script =
-    "import sys\n" +
-    "from blockhost.network_hook import get_connection_endpoint\n" +
-    "print(get_connection_endpoint(sys.argv[1], sys.argv[2], sys.argv[3]))\n";
-  const result = spawnSync("python3", ["-c", script, vmName, bridgeIp, mode], {
+function pushVmConfig(vmName: string): boolean {
+  const result = spawnSync("blockhost-network-hook", ["push-vm-config", vmName], {
     cwd: STATE_DIR,
     timeout: NETWORK_HOOK_TIMEOUT_MS,
     encoding: "utf8",
   });
-  if (result.status !== 0) {
-    const err = (result.stderr || result.stdout || "").trim();
-    throw new Error(`network_hook.get_connection_endpoint failed: ${err || `exit ${String(result.status)}`}`);
-  }
-  return result.stdout.trim();
+  if (result.status === 0) return true;
+  const err = (result.stderr || result.stdout || "").trim();
+  console.warn(`[WARN] blockhost-network-hook push-vm-config failed for ${vmName}: ${err || `exit ${String(result.status)}`}`);
+  return false;
 }
 
-function networkHookCleanup(vmName: string, mode: string): void {
-  const script =
-    "import sys\n" +
-    "from blockhost.network_hook import cleanup\n" +
-    "cleanup(sys.argv[1], sys.argv[2])\n";
-  const result = spawnSync("python3", ["-c", script, vmName, mode], {
+/**
+ * Release per-VM network-layer resources (host-side and guest-side).
+ * Called BEFORE vm-destroy so the plugin can reverse guest state while
+ * the VM is still running. Failure logged, never raised.
+ */
+function networkHookCleanup(vmName: string): void {
+  const result = spawnSync("blockhost-network-hook", ["cleanup", vmName], {
     cwd: STATE_DIR,
     timeout: NETWORK_HOOK_TIMEOUT_MS,
     encoding: "utf8",
   });
   if (result.status !== 0) {
     const err = (result.stderr || result.stdout || "").trim();
-    console.warn(`[WARN] network_hook.cleanup failed for ${vmName}: ${err || `exit ${String(result.status)}`}`);
+    console.warn(`[WARN] blockhost-network-hook cleanup failed for ${vmName}: ${err || `exit ${String(result.status)}`}`);
   }
 }
 
@@ -278,9 +288,9 @@ async function destroyVm(vmName: string): Promise<{ success: boolean; output: st
 /**
  * Handle a newly-detected subscription box.
  *
- * Allocates a VM ID from the local counter, then runs the full 8-step
- * provisioning pipeline: decrypt -> create VM -> parse summary -> resolve
- * connection endpoint -> encrypt details -> mint NFT -> update GECOS -> mark minted.
+ * Allocates a VM ID from the local counter, then runs the provisioning
+ * pipeline (see ENGINE_INTERFACE §13). The handler is network-mode-agnostic:
+ * all routing decisions are dispatched through `blockhost-network-hook`.
  */
 export async function handleSubscriptionCreated(sub: TrackedSubscription): Promise<void> {
   const { state, beaconTokenId, boxId } = sub;
@@ -290,8 +300,6 @@ export async function handleSubscriptionCreated(sub: TrackedSubscription): Promi
   const currentHeight = await getProviderClient().getHeight();
   const expiryDays = calculateExpiryDays(state.expiryHeight, currentHeight);
 
-  const networkMode = readNetworkMode();
-
   console.log("\n========== SUBSCRIPTION CREATED ==========");
   console.log(`Beacon:      ${beaconTokenId.slice(0, 16)}...`);
   console.log(`Box ID:      ${boxId}`);
@@ -300,7 +308,6 @@ export async function handleSubscriptionCreated(sub: TrackedSubscription): Promi
   console.log(`Expiry height: ${state.expiryHeight}`);
   console.log(`Amount:      ${state.amountRemaining} (rate: ${state.ratePerInterval}/${state.intervalBlocks} blocks)`);
   console.log(`User enc:    ${state.userEncrypted.length > 10 ? state.userEncrypted.slice(0, 10) + "..." : state.userEncrypted}`);
-  console.log(`Network mode: ${networkMode}`);
   console.log("------------------------------------------");
   console.log(`Provisioning VM: ${vmName} (${expiryDays} days)`);
 
@@ -352,16 +359,18 @@ export async function handleSubscriptionCreated(sub: TrackedSubscription): Promi
 
   console.log(`[INFO] VM summary: ip=${summary.ip}, vmid=${summary.vmid}`);
 
-  // Step 4: Resolve subscriber-facing host via network hook
-  // (broker -> IPv6 allocation, manual -> static IP, onion -> creates .onion)
+  // Step 4: Resolve the subscriber-facing host via the network dispatcher.
+  // The dispatcher reads vm-db.network_mode and forwards to the active plugin.
+  // No fallback -- minting an NFT with the bridge IP would silently break access.
   let connectionHost: string;
   try {
-    connectionHost = getConnectionEndpoint(vmName, summary.ip, networkMode);
-    console.log(`[OK] Connection endpoint (${networkMode}): ${connectionHost}`);
+    connectionHost = getPublicAddress(vmName);
+    console.log(`[OK] Public address: ${connectionHost}`);
   } catch (err) {
     console.error(`[ERROR] ${err instanceof Error ? err.message : String(err)}`);
-    console.warn(`[WARN] Falling back to bridge IP ${summary.ip} for connection details`);
-    connectionHost = summary.ip;
+    console.error(`[ERROR] Aborting handler for ${vmName} -- no NFT minted`);
+    console.log("==========================================\n");
+    return;
   }
 
   // Step 5: Encrypt connection details with user signature
@@ -409,7 +418,17 @@ export async function handleSubscriptionCreated(sub: TrackedSubscription): Promi
 
   console.log(`[OK] NFT minted for ${vmName} (token ${actualTokenId.slice(0, 16)}...)`);
 
-  // Step 7: Update GECOS with actual token ID
+  // Step 7: Push mode-specific guest configuration. Best-effort here; the
+  // reconciler retries every cycle until network_config_synced flips to true.
+  const pushOk = pushVmConfig(vmName);
+  updateVmFields(vmName, { network_config_synced: pushOk });
+  if (pushOk) {
+    console.log(`[OK] Pushed VM-side network config for ${vmName}`);
+  } else {
+    console.warn(`[WARN] push-vm-config failed for ${vmName} (reconciler will retry)`);
+  }
+
+  // Step 8: Update GECOS with actual token ID
   const gecosCmd = getCommand("update-gecos");
   const gecosArgs = [vmName, state.subscriber, "--nft-id", actualTokenId];
   let gecosUpdated = false;
@@ -432,7 +451,7 @@ export async function handleSubscriptionCreated(sub: TrackedSubscription): Promi
   // Not fatal if GECOS failed -- reconciler will retry on next cycle
   void gecosUpdated;
 
-  // Step 8: Mark NFT minted in database
+  // Step 9: Mark NFT minted in database
   markNftMinted(vmName, actualTokenId);
 
   console.log("==========================================\n");
@@ -584,8 +603,12 @@ else:
   }
 
   const vmName = lookupResult.stdout.toString().trim();
-  console.log(`Destroying VM: ${vmName}`);
 
+  // Network-layer cleanup runs BEFORE vm-destroy: the plugin may need the VM
+  // running to reverse guest-side state (e.g. revoke onion auth, drop routes).
+  networkHookCleanup(vmName);
+
+  console.log(`Destroying VM: ${vmName}`);
   const { success, output } = await destroyVm(vmName);
 
   if (success) {
@@ -593,10 +616,6 @@ else:
   } else {
     console.error(`[ERROR] Failed to destroy VM ${vmName}: ${output}`);
   }
-
-  // Release network resources (onion hidden service, etc.) regardless of
-  // destroy success -- cleanup is safe to run even if the VM is already gone.
-  networkHookCleanup(vmName, readNetworkMode());
 
   console.log("==========================================\n");
 }

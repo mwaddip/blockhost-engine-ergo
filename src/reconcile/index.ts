@@ -1,14 +1,13 @@
 /**
- * NFT ownership reconciler for the Ergo engine.
+ * Per-cycle reconciler for the Ergo engine. Runs three independent passes
+ * over the active VM set on every poll:
  *
- * Runs periodically (triggered by the monitor polling loop). For each VM
- * that has a minted NFT, queries the explorer for the current on-chain holder
- * of the NFT token and compares it against the locally stored owner_wallet.
- * On transfer detection:
- *
- *   1. Updates owner_wallet in the Python vm_db
- *   2. Calls the provisioner's update-gecos command
- *   3. Persists gecos_synced flag for retry on next cycle
+ *   1. NFT ownership: re-query ownerOf for each minted token, sync
+ *      owner_wallet and GECOS on transfers, retry pending GECOS writes.
+ *   2. GECOS catch-up: retry update-gecos for any VM whose gecos_synced
+ *      flag is false (handled inside pass #1).
+ *   3. Network config: retry blockhost-network-hook push-vm-config for any
+ *      VM whose network_config_synced flag is not true. Idempotent.
  *
  * For VMs where nft_minted is false, a warning is logged if the token also
  * cannot be found on-chain (indicating a minting failure that needs operator
@@ -30,7 +29,12 @@ interface VmRecord {
   nft_minted: boolean;
   status: string;
   gecos_synced?: boolean;
+  network_config_synced?: boolean;
 }
+
+// blockhost-network-hook push-vm-config calls into guest-exec; allow time
+// for the qemu-guest-agent to respond on a busy VM.
+const NETWORK_HOOK_TIMEOUT_MS = 30_000;
 
 // -- Concurrency guard -------------------------------------------------------
 
@@ -55,19 +59,32 @@ export async function runReconciliation(
   reconcileInProgress = true;
 
   try {
-    console.log("[RECONCILE] Starting NFT ownership reconciliation...");
+    console.log("[RECONCILE] Starting reconciliation pass...");
 
     const vms = listVmsWithNfts();
     if (vms.length === 0) {
-      console.log("[RECONCILE] No VMs with NFTs to reconcile");
+      console.log("[RECONCILE] No active VMs to reconcile");
       return;
     }
 
     let checked = 0;
     let transferred = 0;
     let errors = 0;
+    let netConfigPushed = 0;
 
     for (const vm of vms) {
+      // Pass 3: catch-up push-vm-config for any VM whose mode-specific
+      // guest config didn't confirm. Independent of NFT state -- a VM that
+      // failed to mint can still need its in-VM network config installed.
+      if (vm.network_config_synced !== true) {
+        if (callPushVmConfig(vm.vm_name)) {
+          if (markNetworkConfigSynced(vm.vm_name)) {
+            console.log(`[RECONCILE] network_config_synced=true for ${vm.vm_name}`);
+            netConfigPushed++;
+          }
+        }
+      }
+
       if (vm.nft_token_id === null) continue;
 
       try {
@@ -125,7 +142,8 @@ export async function runReconciliation(
     }
 
     console.log(
-      `[RECONCILE] Done: checked=${checked}, transfers=${transferred}, errors=${errors}`,
+      `[RECONCILE] Done: checked=${checked}, transfers=${transferred}, ` +
+      `network_pushed=${netConfigPushed}, errors=${errors}`,
     );
   } finally {
     reconcileInProgress = false;
@@ -154,6 +172,7 @@ for vm in vms:
             'nft_minted': bool(vm.get('nft_minted')),
             'status': vm.get('status', ''),
             'gecos_synced': bool(vm.get('gecos_synced', True)),
+            'network_config_synced': bool(vm.get('network_config_synced', False)),
         })
 print(json.dumps(result))
 `;
@@ -257,4 +276,42 @@ function callUpdateGecos(vmName: string, walletAddress: string, nftTokenId: stri
     console.warn(`[RECONCILE] update-gecos error for ${vmName}: ${err}`);
     return false;
   }
+}
+
+// -- Network-layer dispatcher ------------------------------------------------
+
+/**
+ * Retry blockhost-network-hook push-vm-config for a VM whose network_config
+ * didn't sync on the original handler run. Idempotent.
+ */
+function callPushVmConfig(vmName: string): boolean {
+  const result = spawnSync(
+    "blockhost-network-hook",
+    ["push-vm-config", vmName],
+    { timeout: NETWORK_HOOK_TIMEOUT_MS, cwd: STATE_DIR, encoding: "utf8" },
+  );
+  if (result.status === 0) return true;
+  const errMsg = (result.stderr ?? result.stdout ?? "").trim();
+  console.warn(
+    `[RECONCILE] push-vm-config failed for ${vmName}: ${errMsg || `exit ${String(result.status)}`}`,
+  );
+  return false;
+}
+
+/**
+ * Persist network_config_synced=true via the blockhost-vmdb update-fields
+ * CLI -- routes through common's lockfile so concurrent writers stay safe.
+ */
+function markNetworkConfigSynced(vmName: string): boolean {
+  const result = spawnSync(
+    "blockhost-vmdb",
+    ["update-fields", vmName, "--fields", '{"network_config_synced": true}'],
+    { timeout: PYTHON_TIMEOUT_MS, cwd: STATE_DIR, encoding: "utf8" },
+  );
+  if (result.status === 0) return true;
+  const errMsg = (result.stderr ?? result.stdout ?? "").trim();
+  console.warn(
+    `[RECONCILE] Failed to persist network_config_synced for ${vmName}: ${errMsg || `exit ${String(result.status)}`}`,
+  );
+  return false;
 }
